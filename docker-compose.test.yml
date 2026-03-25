@@ -1,0 +1,38 @@
+# Docker Compose for QLever integration tests.
+#
+# Starts a QLever instance with a small test dataset (scientists).
+# Usage:
+#   docker compose -f docker-compose.test.yml up -d --wait
+#   npm test
+#   docker compose -f docker-compose.test.yml down -v
+
+services:
+  qlever:
+    image: docker.io/adfreiburg/qlever:latest
+    ports:
+      - "${QLEVER_TEST_PORT:-7019}:7019"
+    volumes:
+      - qlever-data:/data
+      - ./test/fixtures:/fixtures:ro
+    working_dir: /data
+    entrypoint: ["/bin/bash", "-c"]
+    command:
+      - |
+        set -e
+        cp /fixtures/test-data.nt /data/test-data.nt
+        cp /fixtures/index-settings.json /data/settings.json
+        echo "Building index..."
+        /qlever/qlever-index -i /data/scientists -f /data/test-data.nt \
+          -F nt -s /data/settings.json 2>&1
+        echo "Starting server..."
+        exec /qlever/qlever-server -i /data/scientists -p 7019 -m 1GB \
+          --default-query-timeout 30s
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:7019/?cmd=stats"]
+      interval: 2s
+      timeout: 5s
+      retries: 30
+      start_period: 15s
+
+volumes:
+  qlever-data:

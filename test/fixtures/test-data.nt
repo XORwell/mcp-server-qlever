@@ -1,0 +1,60 @@
+# Minimal RDF test dataset for QLever integration tests.
+# Contains scientists with basic properties for predictable query results.
+
+# --- Types ---
+<http://example.org/Albert_Einstein> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://example.org/Scientist> .
+<http://example.org/Marie_Curie> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://example.org/Scientist> .
+<http://example.org/Isaac_Newton> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://example.org/Scientist> .
+<http://example.org/Ada_Lovelace> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://example.org/Mathematician> .
+<http://example.org/Nikola_Tesla> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://example.org/Inventor> .
+<http://example.org/Physics> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://example.org/Field> .
+<http://example.org/Chemistry> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://example.org/Field> .
+<http://example.org/Mathematics> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://example.org/Field> .
+<http://example.org/Engineering> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://example.org/Field> .
+
+# --- Labels ---
+<http://example.org/Albert_Einstein> <http://www.w3.org/2000/01/rdf-schema#label> "Albert Einstein" .
+<http://example.org/Marie_Curie> <http://www.w3.org/2000/01/rdf-schema#label> "Marie Curie" .
+<http://example.org/Isaac_Newton> <http://www.w3.org/2000/01/rdf-schema#label> "Isaac Newton" .
+<http://example.org/Ada_Lovelace> <http://www.w3.org/2000/01/rdf-schema#label> "Ada Lovelace" .
+<http://example.org/Nikola_Tesla> <http://www.w3.org/2000/01/rdf-schema#label> "Nikola Tesla" .
+<http://example.org/Physics> <http://www.w3.org/2000/01/rdf-schema#label> "Physics" .
+<http://example.org/Chemistry> <http://www.w3.org/2000/01/rdf-schema#label> "Chemistry" .
+<http://example.org/Mathematics> <http://www.w3.org/2000/01/rdf-schema#label> "Mathematics" .
+<http://example.org/Engineering> <http://www.w3.org/2000/01/rdf-schema#label> "Engineering" .
+
+# --- Birth years ---
+<http://example.org/Albert_Einstein> <http://example.org/birthYear> "1879"^^<http://www.w3.org/2001/XMLSchema#integer> .
+<http://example.org/Marie_Curie> <http://example.org/birthYear> "1867"^^<http://www.w3.org/2001/XMLSchema#integer> .
+<http://example.org/Isaac_Newton> <http://example.org/birthYear> "1643"^^<http://www.w3.org/2001/XMLSchema#integer> .
+<http://example.org/Ada_Lovelace> <http://example.org/birthYear> "1815"^^<http://www.w3.org/2001/XMLSchema#integer> .
+<http://example.org/Nikola_Tesla> <http://example.org/birthYear> "1856"^^<http://www.w3.org/2001/XMLSchema#integer> .
+
+# --- Fields ---
+<http://example.org/Albert_Einstein> <http://example.org/field> <http://example.org/Physics> .
+<http://example.org/Marie_Curie> <http://example.org/field> <http://example.org/Physics> .
+<http://example.org/Marie_Curie> <http://example.org/field> <http://example.org/Chemistry> .
+<http://example.org/Isaac_Newton> <http://example.org/field> <http://example.org/Physics> .
+<http://example.org/Isaac_Newton> <http://example.org/field> <http://example.org/Mathematics> .
+<http://example.org/Ada_Lovelace> <http://example.org/field> <http://example.org/Mathematics> .
+<http://example.org/Nikola_Tesla> <http://example.org/field> <http://example.org/Engineering> .
+
+# --- Awards ---
+<http://example.org/Albert_Einstein> <http://example.org/award> "Nobel Prize in Physics 1921" .
+<http://example.org/Marie_Curie> <http://example.org/award> "Nobel Prize in Physics 1903" .
+<http://example.org/Marie_Curie> <http://example.org/award> "Nobel Prize in Chemistry 1911" .
+<http://example.org/Isaac_Newton> <http://example.org/award> "Fellow of the Royal Society" .
+
+# --- Birth places ---
+<http://example.org/Albert_Einstein> <http://example.org/birthPlace> "Ulm, Germany" .
+<http://example.org/Marie_Curie> <http://example.org/birthPlace> "Warsaw, Poland" .
+<http://example.org/Isaac_Newton> <http://example.org/birthPlace> "Woolsthorpe, England" .
+<http://example.org/Ada_Lovelace> <http://example.org/birthPlace> "London, England" .
+<http://example.org/Nikola_Tesla> <http://example.org/birthPlace> "Smiljan, Croatia" .
+
+# --- Relationships ---
+<http://example.org/Albert_Einstein> <http://example.org/knownFor> "Theory of Relativity" .
+<http://example.org/Marie_Curie> <http://example.org/knownFor> "Radioactivity" .
+<http://example.org/Isaac_Newton> <http://example.org/knownFor> "Laws of Motion" .
+<http://example.org/Ada_Lovelace> <http://example.org/knownFor> "First Computer Program" .
+<http://example.org/Nikola_Tesla> <http://example.org/knownFor> "Alternating Current" .
