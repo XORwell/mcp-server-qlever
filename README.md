@@ -40,9 +40,53 @@ Requires Node.js 18 or later.
 
 ## Configuration
 
-### Claude Code
+### Claude Code (CLI)
 
-Add to your `~/.claude.json` (or project-level `.claude.json`):
+Add the server to your project or user configuration with a single command:
+
+```bash
+claude mcp add qlever-wikidata -- npx -y mcp-server-qlever --endpoint https://qlever.cs.uni-freiburg.de/api/wikidata
+```
+
+This writes the entry into `.claude/settings.json` (project-scoped). To add it
+globally for all projects, use the `-s user` flag:
+
+```bash
+claude mcp add -s user qlever-wikidata -- npx -y mcp-server-qlever --endpoint https://qlever.cs.uni-freiburg.de/api/wikidata
+```
+
+You can verify the server is registered:
+
+```bash
+claude mcp list
+```
+
+### Claude Code (VS Code / Cursor)
+
+Open **Settings** (`Ctrl+,` / `Cmd+,`), search for `claude code mcp`, and add
+an entry under **MCP Servers**, or edit your `settings.json` directly:
+
+```jsonc
+// .vscode/settings.json (project) or User Settings (global)
+{
+  "claude-code.mcpServers": {
+    "qlever-wikidata": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "mcp-server-qlever",
+        "--endpoint",
+        "https://qlever.cs.uni-freiburg.de/api/wikidata"
+      ]
+    }
+  }
+}
+```
+
+### Manual configuration (any MCP client)
+
+If you prefer to edit the config file directly, add this to your
+`~/.claude.json` (or project-level `.claude/settings.json`):
 
 ```json
 {
@@ -60,16 +104,58 @@ Add to your `~/.claude.json` (or project-level `.claude.json`):
 }
 ```
 
-### Other MCP Clients
+For a private QLever instance with an access token, use environment variables:
 
-Start the server as a subprocess using stdio transport:
+```json
+{
+  "mcpServers": {
+    "qlever-local": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "mcp-server-qlever",
+        "--endpoint",
+        "http://localhost:7019"
+      ],
+      "env": {
+        "QLEVER_ACCESS_TOKEN": "your-token-here"
+      }
+    }
+  }
+}
+```
+
+### Multiple endpoints
+
+You can register several QLever instances under different names:
+
+```json
+{
+  "mcpServers": {
+    "qlever-wikidata": {
+      "command": "npx",
+      "args": ["-y", "mcp-server-qlever", "-e", "https://qlever.cs.uni-freiburg.de/api/wikidata"]
+    },
+    "qlever-osm": {
+      "command": "npx",
+      "args": ["-y", "mcp-server-qlever", "-e", "https://qlever.cs.uni-freiburg.de/api/osm-planet"]
+    },
+    "qlever-dblp": {
+      "command": "npx",
+      "args": ["-y", "mcp-server-qlever", "-e", "https://qlever.cs.uni-freiburg.de/api/dblp"]
+    }
+  }
+}
+```
+
+### Other MCP clients
+
+The server communicates via stdin/stdout using the MCP protocol. Start it as a
+subprocess and connect over stdio:
 
 ```bash
 mcp-server-qlever --endpoint https://qlever.cs.uni-freiburg.de/api/wikidata
 ```
-
-The server communicates via stdin/stdout using the MCP protocol. Configure your
-client to spawn this command and connect over stdio.
 
 ## Tool Reference
 
