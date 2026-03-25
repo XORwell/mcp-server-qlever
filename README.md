@@ -157,6 +157,16 @@ subprocess and connect over stdio:
 mcp-server-qlever --endpoint https://qlever.cs.uni-freiburg.de/api/wikidata
 ```
 
+## QLever-Specific Features
+
+This server goes beyond generic SPARQL access by exposing QLever's unique capabilities:
+
+- **Context-sensitive autocompletion** — The `sparql_autocomplete` tool uses QLever's `/ac` endpoint to suggest completions based on what actually exists in the index, not just syntactic possibilities.
+- **Query plan analysis** — The `analyze_query` tool returns QLever's internal query plan with estimated result sizes, helping predict performance before execution.
+- **Full-text search** — The `search_fulltext` tool uses QLever's SPARQL+Text extension to find entities co-occurring with keywords in the text corpus.
+- **Spatial queries** — The `spatial_query` tool uses QLever's native spatial join (SIGSPATIAL'25) for efficient geographic searches.
+- **Safe SPARQL Update** — The `sparql_update` tool includes dry-run preview, dangerous operation detection, and access token enforcement.
+
 ## Tool Reference
 
 | Tool | Description | Key Parameters |
@@ -167,6 +177,21 @@ mcp-server-qlever --endpoint https://qlever.cs.uni-freiburg.de/api/wikidata
 | `describe_entity` | Look up all triples for an entity by IRI | `iri`, `limit` |
 | `search_entities` | Full-text search for entities by label | `search_term`, `label_predicate`, `limit` |
 | `get_predicates` | List available predicates ordered by frequency | `limit` |
+| `sparql_autocomplete` | Context-sensitive autocompletion using QLever's /ac endpoint | `partial_query`, `context`, `entity_name`, `limit` |
+| `analyze_query` | Get query execution plan without running the query | `query` |
+| `list_named_graphs` | List all named graphs with triple counts | `limit` |
+| `search_fulltext` | Search QLever's text index for entity-keyword co-occurrence | `keywords`, `filter_type`, `limit` |
+| `spatial_query` | Geographic search (radius or bounding box) using QLever's spatial join | `mode`, `lat`, `lon`, `radius_km` / bbox params, `limit` |
+| `sparql_update` | Execute SPARQL 1.1 Update (requires access token) | `update`, `graph_uri`, `dry_run`, `confirm` |
+
+## Prompts
+
+The server exposes MCP Prompts that guide LLM workflows:
+
+| Prompt | Description |
+|--------|-------------|
+| `explore_dataset` | Step-by-step workflow for discovering an unknown QLever dataset |
+| `safe_update_workflow` | Validated workflow for SPARQL Update operations with dry-run preview |
 
 ## Environment Variables
 
@@ -175,6 +200,8 @@ mcp-server-qlever --endpoint https://qlever.cs.uni-freiburg.de/api/wikidata
 | `QLEVER_ENDPOINT` | QLever API URL (fallback if `--endpoint` not given) | -- |
 | `QLEVER_ACCESS_TOKEN` | Access token for privileged operations | -- |
 | `QLEVER_TIMEOUT` | Default query timeout (e.g. `30s`, `2min`) | `30s` |
+
+The access token is required for `sparql_update` operations and recommended for private QLever instances. It is sent as `Authorization: Bearer` header on all requests when configured.
 
 CLI flags take precedence over environment variables.
 
