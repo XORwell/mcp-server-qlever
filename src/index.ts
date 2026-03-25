@@ -59,7 +59,7 @@ function parseArgs(argv: string[]): CliArgs {
         break;
       case "--version":
       case "-v":
-        console.error("mcp-server-qlever 0.1.0");
+        console.error("mcp-server-qlever 0.2.0");
         process.exit(0);
         break;
     }
@@ -125,7 +125,7 @@ async function main(): Promise<void> {
 
   const server = new McpServer({
     name: "mcp-server-qlever",
-    version: "0.1.0",
+    version: "0.2.0",
     description:
       "Query knowledge graphs via the QLever SPARQL engine. " +
       `Connected to: ${endpoint}`,

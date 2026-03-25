@@ -1,6 +1,6 @@
 {
   "name": "mcp-server-qlever",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Model Context Protocol (MCP) server for QLever SPARQL engine — query knowledge graphs from Claude Code and other MCP clients",
   "author": "XORwell",
   "license": "MIT",
