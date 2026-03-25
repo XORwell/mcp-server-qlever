@@ -88,14 +88,14 @@ OPTIONS
   -v, --version             Show version
 
 EXAMPLES
-  # Wikidata (public QLever instance)
-  mcp-server-qlever -e https://qlever.cs.uni-freiburg.de/api/wikidata
+  # Local QLever instance (Docker)
+  mcp-server-qlever -e http://localhost:7019
 
-  # Local instance with access token
-  mcp-server-qlever -e http://localhost:7001 -t my-secret-token
+  # With access token
+  mcp-server-qlever -e http://localhost:7019 -t my-secret-token
 
   # Configure via environment
-  QLEVER_ENDPOINT=https://qlever.cs.uni-freiburg.de/api/osm-planet mcp-server-qlever
+  QLEVER_ENDPOINT=http://localhost:7019 mcp-server-qlever
 `.trimStart();
   console.error(help);
 }

@@ -5,9 +5,8 @@
 [![MCP](https://img.shields.io/badge/MCP-compatible-green)](https://modelcontextprotocol.io)
 
 A [Model Context Protocol](https://modelcontextprotocol.io) (MCP) server for the
-[QLever](https://qlever.cs.uni-freiburg.de/) SPARQL engine. Connect Claude Code or
-any MCP-compatible client to large-scale knowledge graphs like Wikidata,
-OpenStreetMap, DBLP, and more.
+[QLever](https://github.com/ad-freiburg/qlever) SPARQL engine. Connect Claude Code or
+any MCP-compatible client to knowledge graphs powered by QLever.
 
 ## Features
 
@@ -15,15 +14,42 @@ OpenStreetMap, DBLP, and more.
 - Explore dataset schemas by listing predicates ordered by frequency
 - Look up entities by IRI with outgoing and incoming triples
 - Search for entities by label using full-text matching
-- Retrieve index metadata (triple count, predicates, subjects, objects)
-- Works with any public or private QLever instance
+- Context-sensitive SPARQL autocompletion via QLever's `/ac` endpoint
+- Query plan analysis without execution
+- Geographic search (radius / bounding box) via QLever's native spatial join
+- SPARQL 1.1 Update with dry-run preview and safety guards
+- Works with any QLever instance (local Docker, self-hosted, or public)
 
 ## Quick Start
 
-Run directly with `npx` against the public Wikidata endpoint:
+### 1. Start a QLever instance with Docker
+
+The fastest way to get a working QLever endpoint is with Docker. This example
+uses the [Olympics dataset](https://github.com/wallscope/olympics-rdf) (~200K triples):
 
 ```bash
-npx mcp-server-qlever --endpoint https://qlever.cs.uni-freiburg.de/api/wikidata
+docker run -d --name qlever -p 7019:7019 \
+  adfreiburg/qlever:latest \
+  bash -c "qlever setup-config olympics && qlever get-data && qlever index && qlever start && sleep infinity"
+```
+
+Or use the bundled test dataset (scientists, ~40 triples) for development:
+
+```bash
+docker compose -f docker-compose.test.yml up -d --wait
+```
+
+### 2. Connect the MCP server
+
+```bash
+npx mcp-server-qlever --endpoint http://localhost:7019
+```
+
+Verify it works:
+
+```bash
+# In another terminal, check the index stats
+curl -s "http://localhost:7019/?cmd=stats" | head -5
 ```
 
 ## Installation
@@ -45,14 +71,14 @@ Requires Node.js 18 or later.
 Add the server to your project or user configuration with a single command:
 
 ```bash
-claude mcp add qlever-wikidata -- npx -y mcp-server-qlever --endpoint https://qlever.cs.uni-freiburg.de/api/wikidata
+claude mcp add qlever -- npx -y mcp-server-qlever --endpoint http://localhost:7019
 ```
 
 This writes the entry into `.claude/settings.json` (project-scoped). To add it
 globally for all projects, use the `-s user` flag:
 
 ```bash
-claude mcp add -s user qlever-wikidata -- npx -y mcp-server-qlever --endpoint https://qlever.cs.uni-freiburg.de/api/wikidata
+claude mcp add -s user qlever -- npx -y mcp-server-qlever --endpoint http://localhost:7019
 ```
 
 You can verify the server is registered:
@@ -70,13 +96,13 @@ an entry under **MCP Servers**, or edit your `settings.json` directly:
 // .vscode/settings.json (project) or User Settings (global)
 {
   "claude-code.mcpServers": {
-    "qlever-wikidata": {
+    "qlever": {
       "command": "npx",
       "args": [
         "-y",
         "mcp-server-qlever",
         "--endpoint",
-        "https://qlever.cs.uni-freiburg.de/api/wikidata"
+        "http://localhost:7019"
       ]
     }
   }
@@ -91,25 +117,25 @@ If you prefer to edit the config file directly, add this to your
 ```json
 {
   "mcpServers": {
-    "qlever-wikidata": {
+    "qlever": {
       "command": "npx",
       "args": [
         "-y",
         "mcp-server-qlever",
         "--endpoint",
-        "https://qlever.cs.uni-freiburg.de/api/wikidata"
+        "http://localhost:7019"
       ]
     }
   }
 }
 ```
 
-For a private QLever instance with an access token, use environment variables:
+For a QLever instance with an access token, use environment variables:
 
 ```json
 {
   "mcpServers": {
-    "qlever-local": {
+    "qlever": {
       "command": "npx",
       "args": [
         "-y",
@@ -127,22 +153,23 @@ For a private QLever instance with an access token, use environment variables:
 
 ### Multiple endpoints
 
-You can register several QLever instances under different names:
+You can register several QLever instances under different names. Each runs its
+own Docker container on a different port:
 
 ```json
 {
   "mcpServers": {
     "qlever-wikidata": {
       "command": "npx",
-      "args": ["-y", "mcp-server-qlever", "-e", "https://qlever.cs.uni-freiburg.de/api/wikidata"]
+      "args": ["-y", "mcp-server-qlever", "-e", "http://localhost:7019"]
     },
     "qlever-osm": {
       "command": "npx",
-      "args": ["-y", "mcp-server-qlever", "-e", "https://qlever.cs.uni-freiburg.de/api/osm-planet"]
+      "args": ["-y", "mcp-server-qlever", "-e", "http://localhost:7020"]
     },
     "qlever-dblp": {
       "command": "npx",
-      "args": ["-y", "mcp-server-qlever", "-e", "https://qlever.cs.uni-freiburg.de/api/dblp"]
+      "args": ["-y", "mcp-server-qlever", "-e", "http://localhost:7021"]
     }
   }
 }
@@ -154,18 +181,52 @@ The server communicates via stdin/stdout using the MCP protocol. Start it as a
 subprocess and connect over stdio:
 
 ```bash
-mcp-server-qlever --endpoint https://qlever.cs.uni-freiburg.de/api/wikidata
+mcp-server-qlever --endpoint http://localhost:7019
 ```
+
+## Running QLever with Docker
+
+QLever requires a two-step process: build an index from RDF data, then serve it.
+The `qlever` CLI tool (bundled in the Docker image) simplifies this.
+
+### Using a preconfigured dataset
+
+```bash
+# Start a container
+docker run -it --name qlever-wikidata -p 7019:7019 adfreiburg/qlever:latest bash
+
+# Inside the container:
+qlever setup-config wikidata    # or: olympics, dblp, osm-planet, uniprot, ...
+qlever get-data                 # downloads the dataset
+qlever index                    # builds the index (may take minutes to hours)
+qlever start                    # starts the SPARQL server on port 7019
+```
+
+### Using your own RDF data
+
+```bash
+docker run -it --name qlever-custom -p 7019:7019 \
+  -v /path/to/your/data:/data \
+  adfreiburg/qlever:latest bash
+
+# Inside the container:
+qlever-index -i /data/myindex -f /data/mydata.nt -F nt \
+  -s /data/settings.json
+qlever-server -i /data/myindex -p 7019 -m 4GB
+```
+
+See the [QLever documentation](https://docs.qlever.dev/) for details on dataset
+configuration, index settings, and performance tuning.
 
 ## QLever-Specific Features
 
 This server goes beyond generic SPARQL access by exposing QLever's unique capabilities:
 
-- **Context-sensitive autocompletion** — The `sparql_autocomplete` tool uses QLever's `/ac` endpoint to suggest completions based on what actually exists in the index, not just syntactic possibilities.
-- **Query plan analysis** — The `analyze_query` tool returns QLever's internal query plan with estimated result sizes, helping predict performance before execution.
-- **Full-text search** — The `search_fulltext` tool uses QLever's SPARQL+Text extension to find entities co-occurring with keywords in the text corpus.
-- **Spatial queries** — The `spatial_query` tool uses QLever's native spatial join (SIGSPATIAL'25) for efficient geographic searches.
-- **Safe SPARQL Update** — The `sparql_update` tool includes dry-run preview, dangerous operation detection, and access token enforcement.
+- **Context-sensitive autocompletion** -- The `sparql_autocomplete` tool uses QLever's `/ac` endpoint to suggest completions based on what actually exists in the index, not just syntactic possibilities.
+- **Query plan analysis** -- The `analyze_query` tool returns QLever's internal query plan with estimated result sizes, helping predict performance before execution.
+- **Full-text search** -- The `search_fulltext` tool uses QLever's SPARQL+Text extension to find entities co-occurring with keywords in the text corpus.
+- **Spatial queries** -- The `spatial_query` tool uses QLever's native spatial join (SIGSPATIAL'25) for efficient geographic searches.
+- **Safe SPARQL Update** -- The `sparql_update` tool includes dry-run preview, dangerous operation detection, and access token enforcement.
 
 ## Tool Reference
 
@@ -201,7 +262,9 @@ The server exposes MCP Prompts that guide LLM workflows:
 | `QLEVER_ACCESS_TOKEN` | Access token for privileged operations | -- |
 | `QLEVER_TIMEOUT` | Default query timeout (e.g. `30s`, `2min`) | `30s` |
 
-The access token is required for `sparql_update` operations and recommended for private QLever instances. It is sent as `Authorization: Bearer` header on all requests when configured.
+The access token is required for `sparql_update` operations and recommended for
+private QLever instances. It is sent as `Authorization: Bearer` header on all
+requests when configured.
 
 CLI flags take precedence over environment variables.
 
@@ -225,12 +288,13 @@ git clone https://github.com/XORwell/mcp-server-qlever.git
 cd mcp-server-qlever
 npm install
 npm run build
-npm test
+npm test          # runs unit tests (no Docker needed)
 ```
 
-### Docker Testing
+### Integration Testing with Docker
 
-Run integration tests against a real QLever instance:
+Run the full test suite including integration tests against a real QLever
+instance:
 
 ```bash
 docker compose -f docker-compose.test.yml up -d --wait
@@ -250,6 +314,7 @@ npm run test:ci
 
 ## Links
 
-- [QLever](https://qlever.cs.uni-freiburg.de/) -- High-performance SPARQL engine (University of Freiburg)
+- [QLever](https://github.com/ad-freiburg/qlever) -- High-performance SPARQL engine (University of Freiburg)
+- [QLever Documentation](https://docs.qlever.dev/) -- Setup guides and API reference
 - [Model Context Protocol](https://modelcontextprotocol.io) -- MCP specification
 - [GitHub Issues](https://github.com/XORwell/mcp-server-qlever/issues) -- Bug reports and feature requests
