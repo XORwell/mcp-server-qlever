@@ -265,7 +265,7 @@ SELECT ?subject ?predicate WHERE {
       label_predicate: z
         .string()
         .regex(
-          /^([a-zA-Z_][a-zA-Z0-9_.\-]*:[a-zA-Z0-9_.\-]*|<[^>]+>)$/,
+          /^([a-zA-Z_][a-zA-Z0-9_.\-]*:[a-zA-Z0-9_.\-]*|:[a-zA-Z0-9_.\-]+|<[^>]+>)$/,
           "Must be a prefixed name (e.g. 'rdfs:label') or a full IRI (e.g. '<http://...>')",
         )
         .optional()
