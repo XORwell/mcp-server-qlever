@@ -31,7 +31,7 @@ export interface QleverQueryResult {
 /** Error response from QLever. */
 export interface QleverErrorResult {
   status: "ERROR";
-  exception: string;
+  exception?: string;
   query?: string;
 }
 
@@ -61,6 +61,16 @@ export interface QleverClientOptions {
   defaultTimeout?: string;
 }
 
+const TIMEOUT_PATTERN = /^\d+(ns|us|ms|s|min|h)$/;
+function validateTimeout(timeout: string): string {
+  if (!TIMEOUT_PATTERN.test(timeout)) {
+    throw new QleverError(
+      `Invalid timeout format: "${timeout}". Expected: <number><unit> where unit is ns, us, ms, s, min, or h.`,
+    );
+  }
+  return timeout;
+}
+
 export class QleverClient {
   private readonly endpoint: string;
   private readonly accessToken?: string;
@@ -87,9 +97,10 @@ export class QleverClient {
     query: string,
     opts?: { timeout?: string; maxRows?: number },
   ): Promise<QleverQueryResult> {
+    const timeout = validateTimeout(opts?.timeout ?? this.defaultTimeout);
     const params = new URLSearchParams();
     params.set("query", query);
-    params.set("timeout", opts?.timeout ?? this.defaultTimeout);
+    params.set("timeout", timeout);
     if (opts?.maxRows !== undefined) {
       params.set("send", String(opts.maxRows));
     }
@@ -99,7 +110,7 @@ export class QleverClient {
     });
 
     if (result.status === "ERROR") {
-      throw new QleverError(result.exception, query);
+      throw new QleverError(result.exception ?? "Unknown QLever error", query);
     }
     return result;
   }
@@ -128,6 +139,79 @@ export class QleverClient {
       headers: this.baseHeaders(),
     });
     return this.parseJson<Record<string, unknown>>(res);
+  }
+
+  // -------------------------------------------------------------------------
+  // Autocompletion
+  // -------------------------------------------------------------------------
+
+  /** Call QLever's /ac autocompletion endpoint. */
+  async autocomplete(
+    partialQuery: string,
+    opts?: { context?: string; entityName?: string; limit?: number },
+  ): Promise<{ completions: Array<{ text: string; score?: number }> }> {
+    const url = new URL(this.endpoint);
+    url.pathname = url.pathname.replace(/\/?$/, "/ac");
+    url.searchParams.set("q", partialQuery);
+    if (opts?.context) url.searchParams.set("context", opts.context);
+    if (opts?.entityName) url.searchParams.set("entity_name", opts.entityName);
+    if (opts?.limit !== undefined) url.searchParams.set("limit", String(opts.limit));
+
+    const res = await this.fetch(url.toString(), {
+      method: "GET",
+      headers: this.baseHeaders(),
+    });
+    return this.parseJson<{ completions: Array<{ text: string; score?: number }> }>(res);
+  }
+
+  // -------------------------------------------------------------------------
+  // SPARQL Update
+  // -------------------------------------------------------------------------
+
+  /** Execute a SPARQL Update (requires access token). */
+  async update(
+    updateString: string,
+    opts?: { graphUri?: string },
+  ): Promise<{ success: boolean; message: string }> {
+    if (!this.accessToken) {
+      throw new QleverError(
+        "SPARQL Update requires an access token. Set QLEVER_ACCESS_TOKEN or use --access-token.",
+      );
+    }
+
+    const url = new URL(this.endpoint);
+    if (opts?.graphUri) {
+      url.searchParams.set("using-graph-uri", opts.graphUri);
+    }
+
+    const headers: Record<string, string> = {
+      ...this.baseHeaders(),
+      "Content-Type": "application/sparql-update",
+    };
+
+    const res = await this.fetch(url.toString(), {
+      method: "POST",
+      headers,
+      body: updateString,
+    });
+
+    const text = await res.text();
+    try {
+      const parsed = JSON.parse(text);
+      if (parsed.status === "ERROR") {
+        throw new QleverError(parsed.exception, updateString);
+      }
+      return { success: true, message: parsed.message ?? "Update executed successfully." };
+    } catch (err) {
+      if (err instanceof QleverError) throw err;
+      // Non-JSON response — treat as success if HTTP was OK
+      return { success: true, message: text || "Update executed successfully." };
+    }
+  }
+
+  /** Check if access token is configured. */
+  get hasAccessToken(): boolean {
+    return !!this.accessToken;
   }
 
   // -------------------------------------------------------------------------
@@ -161,7 +245,7 @@ export class QleverClient {
 
   private async fetch(url: string, init: RequestInit): Promise<Response> {
     const res = await globalThis.fetch(url, init);
-    if (!res.ok && res.status !== 200) {
+    if (!res.ok) {
       const body = await res.text().catch(() => "(no body)");
       throw new QleverError(
         `HTTP ${res.status} ${res.statusText}: ${body}`,

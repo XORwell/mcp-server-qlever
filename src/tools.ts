@@ -75,6 +75,10 @@ export function registerTools(server: McpServer, client: QleverClient): void {
         .describe("The SPARQL query to execute"),
       timeout: z
         .string()
+        .regex(
+          /^\d+(ns|us|ms|s|min|h)$/,
+          "Must be a QLever duration (e.g. '30s', '5000ms', '2min')",
+        )
         .optional()
         .describe(
           "Query timeout in QLever duration format (e.g. '30s', '5000ms', '2min'). " +
@@ -84,9 +88,10 @@ export function registerTools(server: McpServer, client: QleverClient): void {
         .number()
         .int()
         .positive()
+        .max(10000)
         .optional()
         .describe(
-          "Maximum number of result rows to return. " +
+          "Maximum number of result rows to return (max 10000). " +
             "The query still computes fully; this only limits serialization.",
         ),
     },
@@ -122,14 +127,19 @@ export function registerTools(server: McpServer, client: QleverClient): void {
         .describe("The SPARQL query to execute"),
       timeout: z
         .string()
+        .regex(
+          /^\d+(ns|us|ms|s|min|h)$/,
+          "Must be a QLever duration (e.g. '30s', '5000ms', '2min')",
+        )
         .optional()
         .describe("Query timeout (e.g. '30s', '2min')"),
       max_rows: z
         .number()
         .int()
         .positive()
+        .max(10000)
         .optional()
-        .describe("Maximum number of result rows to serialize"),
+        .describe("Maximum number of result rows to serialize (max 10000)"),
     },
     async ({ query, timeout, max_rows }) => {
       try {
@@ -197,9 +207,10 @@ export function registerTools(server: McpServer, client: QleverClient): void {
         .number()
         .int()
         .positive()
+        .max(10000)
         .optional()
         .default(100)
-        .describe("Maximum number of triples to return (default: 100)"),
+        .describe("Maximum number of triples to return (default: 100, max 10000)"),
     },
     async ({ iri, limit }) => {
       // Ensure the IRI is wrapped in angle brackets if not already
@@ -253,6 +264,10 @@ SELECT ?subject ?predicate WHERE {
         .describe("The text to search for in entity labels"),
       label_predicate: z
         .string()
+        .regex(
+          /^([a-zA-Z_][a-zA-Z0-9_.\-]*:[a-zA-Z0-9_.\-]*|<[^>]+>)$/,
+          "Must be a prefixed name (e.g. 'rdfs:label') or a full IRI (e.g. '<http://...>')",
+        )
         .optional()
         .default("rdfs:label")
         .describe(
@@ -264,9 +279,10 @@ SELECT ?subject ?predicate WHERE {
         .number()
         .int()
         .positive()
+        .max(1000)
         .optional()
         .default(20)
-        .describe("Maximum number of results (default: 20)"),
+        .describe("Maximum number of results (default: 20, max 1000)"),
     },
     async ({ search_term, label_predicate, limit }) => {
       const query = `
@@ -304,9 +320,10 @@ SELECT ?entity ?label WHERE {
         .number()
         .int()
         .positive()
+        .max(1000)
         .optional()
         .default(50)
-        .describe("Maximum number of predicates to return (default: 50)"),
+        .describe("Maximum number of predicates to return (default: 50, max 1000)"),
     },
     async ({ limit }) => {
       const query = `
