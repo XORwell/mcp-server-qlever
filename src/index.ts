@@ -20,6 +20,8 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { QleverClient } from "./qlever-client.js";
 import { registerTools } from "./tools.js";
+import { registerAdvancedTools } from "./advanced-tools.js";
+import { registerPrompts } from "./prompts.js";
 
 // ---------------------------------------------------------------------------
 // CLI argument parsing
@@ -132,6 +134,8 @@ async function main(): Promise<void> {
   });
 
   registerTools(server, client);
+  registerAdvancedTools(server, client);
+  registerPrompts(server);
 
   const transport = new StdioServerTransport();
   await server.connect(transport);
