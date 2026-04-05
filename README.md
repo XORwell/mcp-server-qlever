@@ -365,7 +365,7 @@ npm run test:ci:gnd   # all tests including E2E (GND)
 
 | Layer | Tests | What it covers |
 |-------|-------|----------------|
-| Unit | 276 | All tools, client, security (SPARQL injection, IRI validation, bounds, timeouts) |
+| Unit | 282 | All tools, client, security (SPARQL injection, IRI validation, bounds, timeouts) |
 | Integration | 25 | Real QLever queries against scientists and GND authority data |
 | E2E | 29 | Real MCP server process over stdio, all 12 tools + 2 prompts against live QLever |
 
