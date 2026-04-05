@@ -98,7 +98,8 @@ describe("Integration: QleverClient", () => {
       "SELECT (COUNT(*) AS ?count) WHERE { ?s ?p ?o }",
     );
     expect(result.status).toBe("OK");
-    const count = parseInt(result.res[0][0], 10);
+    // QLever may return count as a quoted string — strip quotes
+    const count = parseInt(result.res[0][0].replace(/"/g, ""), 10);
     // Test dataset has scientists with multiple properties
     expect(count).toBeGreaterThan(30);
   });
