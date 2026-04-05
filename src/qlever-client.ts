@@ -37,7 +37,7 @@ export interface QleverErrorResult {
 
 export type QleverResult = QleverQueryResult | QleverErrorResult;
 
-/** Index statistics returned by `?cmd=stats`. */
+/** Index statistics returned by `?cmd=stats` (normalized from QLever's kebab-case keys). */
 export interface QleverIndexStats {
   name: string;
   numTriples: number;
@@ -72,15 +72,20 @@ function validateTimeout(timeout: string): string {
 }
 
 export class QleverClient {
-  private readonly endpoint: string;
-  private readonly accessToken?: string;
+  private readonly _endpoint: string;
+  private readonly _accessToken?: string;
   private readonly defaultTimeout: string;
 
   constructor(options: QleverClientOptions) {
     // Strip trailing slash for consistency
-    this.endpoint = options.endpoint.replace(/\/+$/, "");
-    this.accessToken = options.accessToken;
+    this._endpoint = options.endpoint.replace(/\/+$/, "");
+    this._accessToken = options.accessToken;
     this.defaultTimeout = options.defaultTimeout ?? "30s";
+  }
+
+  /** The configured QLever API endpoint URL. */
+  get endpoint(): string {
+    return this._endpoint;
   }
 
   // -------------------------------------------------------------------------
@@ -121,20 +126,32 @@ export class QleverClient {
 
   /** Retrieve index statistics (dataset name, triple count, etc.). */
   async getIndexStats(): Promise<QleverIndexStats> {
-    const url = new URL(this.endpoint);
+    const url = new URL(this._endpoint);
     url.searchParams.set("cmd", "stats");
-    const res = await this.fetch(url.toString(), {
+    const res = await this.fetchUrl(url.toString(), {
       method: "GET",
       headers: this.baseHeaders(),
     });
-    return this.parseJson<QleverIndexStats>(res);
+    const raw = await this.parseJson<Record<string, unknown>>(res);
+
+    // QLever returns kebab-case keys (e.g. "num-triples-normal").
+    // Normalize to the camelCase QleverIndexStats interface while
+    // preserving the original keys for direct access.
+    return {
+      ...raw,
+      name: String(raw["name-index"] ?? ""),
+      numTriples: Number(raw["num-triples-normal"] ?? 0),
+      numPredicates: Number(raw["num-predicates-normal"] ?? 0),
+      numSubjects: Number(raw["num-subjects-normal"] ?? 0),
+      numObjects: Number(raw["num-objects-normal"] ?? 0),
+    };
   }
 
   /** Retrieve cache statistics. */
   async getCacheStats(): Promise<Record<string, unknown>> {
-    const url = new URL(this.endpoint);
+    const url = new URL(this._endpoint);
     url.searchParams.set("cmd", "cache-stats");
-    const res = await this.fetch(url.toString(), {
+    const res = await this.fetchUrl(url.toString(), {
       method: "GET",
       headers: this.baseHeaders(),
     });
@@ -150,18 +167,44 @@ export class QleverClient {
     partialQuery: string,
     opts?: { context?: string; entityName?: string; limit?: number },
   ): Promise<{ completions: Array<{ text: string; score?: number }> }> {
-    const url = new URL(this.endpoint);
-    url.pathname = url.pathname.replace(/\/?$/, "/ac");
+    const url = new URL(this._endpoint);
+    url.pathname = url.pathname.replace(/\/+$/, "") + "/ac";
     url.searchParams.set("q", partialQuery);
     if (opts?.context) url.searchParams.set("context", opts.context);
     if (opts?.entityName) url.searchParams.set("entity_name", opts.entityName);
     if (opts?.limit !== undefined) url.searchParams.set("limit", String(opts.limit));
 
-    const res = await this.fetch(url.toString(), {
+    const res = await this.fetchUrl(url.toString(), {
       method: "GET",
       headers: this.baseHeaders(),
     });
     return this.parseJson<{ completions: Array<{ text: string; score?: number }> }>(res);
+  }
+
+  // -------------------------------------------------------------------------
+  // Query analysis
+  // -------------------------------------------------------------------------
+
+  /** Analyze a SPARQL query plan without executing it. */
+  async analyzeQuery(query: string): Promise<unknown> {
+    const url = new URL(this._endpoint);
+    url.searchParams.set("query", query);
+    url.searchParams.set("action", "plan");
+
+    const res = await this.fetchUrl(url.toString(), {
+      method: "GET",
+      headers: {
+        Accept: "application/json",
+        ...this.baseHeaders(),
+      },
+    });
+
+    const text = await res.text();
+    try {
+      return JSON.parse(text);
+    } catch {
+      return text;
+    }
   }
 
   // -------------------------------------------------------------------------
@@ -173,13 +216,13 @@ export class QleverClient {
     updateString: string,
     opts?: { graphUri?: string },
   ): Promise<{ success: boolean; message: string }> {
-    if (!this.accessToken) {
+    if (!this._accessToken) {
       throw new QleverError(
         "SPARQL Update requires an access token. Set QLEVER_ACCESS_TOKEN or use --access-token.",
       );
     }
 
-    const url = new URL(this.endpoint);
+    const url = new URL(this._endpoint);
     if (opts?.graphUri) {
       url.searchParams.set("using-graph-uri", opts.graphUri);
     }
@@ -189,7 +232,7 @@ export class QleverClient {
       "Content-Type": "application/sparql-update",
     };
 
-    const res = await this.fetch(url.toString(), {
+    const res = await this.fetchUrl(url.toString(), {
       method: "POST",
       headers,
       body: updateString,
@@ -199,7 +242,7 @@ export class QleverClient {
     try {
       const parsed = JSON.parse(text);
       if (parsed.status === "ERROR") {
-        throw new QleverError(parsed.exception, updateString);
+        throw new QleverError(parsed.exception ?? "Unknown QLever error", updateString);
       }
       return { success: true, message: parsed.message ?? "Update executed successfully." };
     } catch (err) {
@@ -211,7 +254,7 @@ export class QleverClient {
 
   /** Check if access token is configured. */
   get hasAccessToken(): boolean {
-    return !!this.accessToken;
+    return !!this._accessToken;
   }
 
   // -------------------------------------------------------------------------
@@ -227,7 +270,7 @@ export class QleverClient {
       Accept: opts.accept,
       "Content-Type": "application/x-www-form-urlencoded",
     };
-    const res = await this.fetch(this.endpoint, {
+    const res = await this.fetchUrl(this._endpoint, {
       method: "POST",
       headers,
       body: params.toString(),
@@ -237,18 +280,24 @@ export class QleverClient {
 
   private baseHeaders(): Record<string, string> {
     const headers: Record<string, string> = {};
-    if (this.accessToken) {
-      headers["Authorization"] = `Bearer ${this.accessToken}`;
+    if (this._accessToken) {
+      headers["Authorization"] = `Bearer ${this._accessToken}`;
     }
     return headers;
   }
 
-  private async fetch(url: string, init: RequestInit): Promise<Response> {
-    const res = await globalThis.fetch(url, init);
+  /** Maximum time to wait for any HTTP response (60s). */
+  private static readonly FETCH_TIMEOUT_MS = 60_000;
+
+  private async fetchUrl(url: string, init: RequestInit): Promise<Response> {
+    const res = await globalThis.fetch(url, {
+      ...init,
+      signal: init.signal ?? AbortSignal.timeout(QleverClient.FETCH_TIMEOUT_MS),
+    });
     if (!res.ok) {
       const body = await res.text().catch(() => "(no body)");
       throw new QleverError(
-        `HTTP ${res.status} ${res.statusText}: ${body}`,
+        `HTTP ${res.status} ${res.statusText}: ${body.slice(0, 500)}`,
       );
     }
     return res;

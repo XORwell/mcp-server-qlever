@@ -1,0 +1,77 @@
+# All-in-one: QLever + MCP server.
+#
+# Starts a QLever instance with the bundled test dataset (scientists, ~40 triples)
+# and connects the MCP server to it. Ready to use out of the box.
+#
+# Usage:
+#   docker compose up -d --wait
+#   # MCP server is now available on stdio via:
+#   docker compose exec mcp node dist/index.js -e http://qlever:7019
+#
+# For a different dataset, override QLEVER_DATA_URL and QLEVER_DATA_FORMAT:
+#   QLEVER_DATA_URL=https://example.org/data.nt docker compose up -d --wait
+#
+# For GND data specifically, use docker-compose.gnd.yml instead.
+
+services:
+  qlever:
+    image: docker.io/adfreiburg/qlever:latest
+    ports:
+      - "${QLEVER_PORT:-7019}:7019"
+    volumes:
+      - qlever-index:/data
+      - ./test/fixtures:/fixtures:ro
+    working_dir: /data
+    entrypoint: ["/bin/bash", "-c"]
+    command:
+      - |
+        set -e
+        if [ -f /data/index.ready ]; then
+          echo "Index already built, starting server..."
+          exec /qlever/qlever-server -i /data/dataset -p 7019 \
+            -m $${QLEVER_MEMORY:-1GB} --default-query-timeout 30s
+        fi
+
+        # Default: use bundled test data
+        DATA_FILE="/fixtures/test-data.nt"
+        DATA_FORMAT="nt"
+
+        # If QLEVER_DATA_URL is set, download the data
+        if [ -n "$${QLEVER_DATA_URL:-}" ]; then
+          echo "Downloading data from $${QLEVER_DATA_URL}..."
+          curl -fsSL -o /data/input-data "$${QLEVER_DATA_URL}"
+          DATA_FILE="/data/input-data"
+          DATA_FORMAT="$${QLEVER_DATA_FORMAT:-nt}"
+        fi
+
+        cat > /data/settings.json << 'SETTINGS'
+        {
+          "num-triples-per-batch": 100000,
+          "parser-batch-size": 10000,
+          "ascii-prefixes-only": false,
+          "languages-internal": ["de", "en", ""],
+          "prefixes-external": []
+        }
+        SETTINGS
+
+        echo "Building index..."
+        /qlever/qlever-index -i /data/dataset -f "$${DATA_FILE}" \
+          -F "$${DATA_FORMAT}" -s /data/settings.json 2>&1
+        touch /data/index.ready
+
+        echo "Starting server..."
+        exec /qlever/qlever-server -i /data/dataset -p 7019 \
+          -m $${QLEVER_MEMORY:-1GB} --default-query-timeout 30s
+    environment:
+      - QLEVER_DATA_URL=${QLEVER_DATA_URL:-}
+      - QLEVER_DATA_FORMAT=${QLEVER_DATA_FORMAT:-nt}
+      - QLEVER_MEMORY=${QLEVER_MEMORY:-1GB}
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:7019/?cmd=stats"]
+      interval: 3s
+      timeout: 5s
+      retries: 30
+      start_period: 30s
+
+volumes:
+  qlever-index:

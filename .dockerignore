@@ -1,0 +1,8 @@
+node_modules
+dist
+test
+.git
+*.md
+*.yml
+!docker-compose*.yml
+scripts

@@ -405,7 +405,7 @@ describe("QleverClient", () => {
       origServer.on("request", (req, res) => {
         receivedAuthHeader = req.headers["authorization"];
         res.writeHead(200, { "Content-Type": "application/json" });
-        res.end(JSON.stringify({ name: "test", numTriples: 1, numPredicates: 1, numSubjects: 1, numObjects: 1 }));
+        res.end(JSON.stringify({ "name-index": "test", "num-triples-normal": 1, "num-predicates-normal": 1, "num-subjects-normal": 1, "num-objects-normal": 1 }));
       });
 
       await headerMock.start();
@@ -434,7 +434,7 @@ describe("QleverClient", () => {
       origServer.on("request", (req, res) => {
         receivedAuthHeader = req.headers["authorization"];
         res.writeHead(200, { "Content-Type": "application/json" });
-        res.end(JSON.stringify({ name: "test", numTriples: 1, numPredicates: 1, numSubjects: 1, numObjects: 1 }));
+        res.end(JSON.stringify({ "name-index": "test", "num-triples-normal": 1, "num-predicates-normal": 1, "num-subjects-normal": 1, "num-objects-normal": 1 }));
       });
 
       await headerMock.start();
@@ -445,6 +445,35 @@ describe("QleverClient", () => {
 
         await noAuthClient.getIndexStats();
         expect(receivedAuthHeader).toBeUndefined();
+      } finally {
+        await headerMock.stop();
+      }
+    });
+
+    it("sends Authorization header on analyzeQuery requests", async () => {
+      let receivedAuthHeader: string | undefined;
+
+      const headerMock = new MockQleverServer((_method, _url, _body) => {
+        return { body: { plan: "test" } };
+      });
+
+      const origServer = (headerMock as unknown as { server: import("node:http").Server }).server;
+      origServer.removeAllListeners("request");
+      origServer.on("request", (req, res) => {
+        receivedAuthHeader = req.headers["authorization"];
+        res.writeHead(200, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ plan: "test" }));
+      });
+
+      await headerMock.start();
+      try {
+        const authedClient = new QleverClient({
+          endpoint: headerMock.url,
+          accessToken: "analyze-token",
+        });
+
+        await authedClient.analyzeQuery("SELECT ?x WHERE { ?x ?y ?z }");
+        expect(receivedAuthHeader).toBe("Bearer analyze-token");
       } finally {
         await headerMock.stop();
       }
@@ -485,6 +514,236 @@ describe("QleverClient", () => {
       } finally {
         await headerMock.stop();
       }
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // endpoint getter
+  // -------------------------------------------------------------------------
+
+  describe("endpoint getter", () => {
+    it("returns the configured endpoint", () => {
+      expect(client.endpoint).toBe(mock.url);
+    });
+
+    it("returns endpoint with trailing slash stripped", () => {
+      const c = new QleverClient({ endpoint: "http://example.org/api/" });
+      expect(c.endpoint).toBe("http://example.org/api");
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // analyzeQuery()
+  // -------------------------------------------------------------------------
+
+  describe("analyzeQuery()", () => {
+    it("sends query with action=plan via GET", async () => {
+      let receivedQuery = "";
+      let receivedAction = "";
+      let receivedMethod = "";
+
+      mock.setHandler((method, url) => {
+        receivedMethod = method;
+        receivedQuery = url.searchParams.get("query") ?? "";
+        receivedAction = url.searchParams.get("action") ?? "";
+        return { body: { plan: "mock-plan" } };
+      });
+
+      await client.analyzeQuery("SELECT ?x WHERE { ?x ?y ?z }");
+
+      expect(receivedMethod).toBe("GET");
+      expect(receivedQuery).toBe("SELECT ?x WHERE { ?x ?y ?z }");
+      expect(receivedAction).toBe("plan");
+    });
+
+    it("returns parsed JSON when response is valid JSON", async () => {
+      mock.setHandler(() => ({ body: { plan: "test-plan", cost: 42 } }));
+
+      const result = await client.analyzeQuery("SELECT 1");
+      expect(result).toEqual({ plan: "test-plan", cost: 42 });
+    });
+
+    it("returns raw text when response is not JSON", async () => {
+      mock.setHandler(() => ({ body: "plain text plan output" }));
+
+      const result = await client.analyzeQuery("SELECT 1");
+      expect(result).toBe("plain text plan output");
+    });
+
+    it("throws QleverError on HTTP error", async () => {
+      mock.setHandler(() => ({ status: 500, body: "Server Error" }));
+
+      await expect(client.analyzeQuery("SELECT 1")).rejects.toThrow(QleverError);
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // update() error handling
+  // -------------------------------------------------------------------------
+
+  describe("update() error handling", () => {
+    it('returns "Unknown QLever error" when exception field is missing', async () => {
+      const authedClient = new QleverClient({
+        endpoint: mock.url,
+        accessToken: "token",
+      });
+
+      mock.setHandler(() => ({
+        body: { status: "ERROR" },
+      }));
+
+      await expect(authedClient.update("INSERT DATA { <a> <b> <c> }")).rejects.toThrow(
+        "Unknown QLever error",
+      );
+    });
+
+    it("uses exception field when present in update error", async () => {
+      const authedClient = new QleverClient({
+        endpoint: mock.url,
+        accessToken: "token",
+      });
+
+      mock.setHandler(() => ({
+        body: { status: "ERROR", exception: "Parse error in update" },
+      }));
+
+      await expect(authedClient.update("BAD UPDATE")).rejects.toThrow(
+        "Parse error in update",
+      );
+    });
+
+    it("preserves update string in QleverError.query", async () => {
+      const authedClient = new QleverClient({
+        endpoint: mock.url,
+        accessToken: "token",
+      });
+
+      mock.setHandler(() => ({
+        body: { status: "ERROR", exception: "fail" },
+      }));
+
+      try {
+        await authedClient.update("DELETE WHERE { ?s ?p ?o }");
+        expect.fail("Should have thrown");
+      } catch (err) {
+        expect(err).toBeInstanceOf(QleverError);
+        expect((err as QleverError).query).toBe("DELETE WHERE { ?s ?p ?o }");
+      }
+    });
+
+    it("treats non-JSON 200 response as success", async () => {
+      const authedClient = new QleverClient({
+        endpoint: mock.url,
+        accessToken: "token",
+      });
+
+      mock.setHandler(() => ({
+        body: "Update successful",
+      }));
+
+      const result = await authedClient.update("INSERT DATA { <a> <b> <c> }");
+      expect(result.success).toBe(true);
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // autocomplete() URL construction
+  // -------------------------------------------------------------------------
+
+  describe("autocomplete()", () => {
+    it("appends /ac to the endpoint path", async () => {
+      let receivedPath = "";
+
+      mock.setHandler((_method, url) => {
+        receivedPath = url.pathname;
+        return { body: { completions: [] } };
+      });
+
+      await client.autocomplete("SELECT ?x WHERE { ?x ");
+      expect(receivedPath).toBe("/ac");
+    });
+
+    it("appends /ac without double slash for path-based endpoints", async () => {
+      let receivedPath = "";
+
+      const pathMock = new MockQleverServer((_method, url) => {
+        receivedPath = url.pathname;
+        return { body: { completions: [] } };
+      });
+
+      await pathMock.start();
+      try {
+        const pathClient = new QleverClient({
+          endpoint: pathMock.url + "/api/wikidata",
+        });
+        await pathClient.autocomplete("SELECT ");
+        expect(receivedPath).toBe("/api/wikidata/ac");
+        expect(receivedPath).not.toContain("//");
+      } finally {
+        await pathMock.stop();
+      }
+    });
+
+    it("passes query parameter as q", async () => {
+      let receivedQ = "";
+
+      mock.setHandler((_method, url) => {
+        receivedQ = url.searchParams.get("q") ?? "";
+        return { body: { completions: [] } };
+      });
+
+      await client.autocomplete("SELECT ?x WHERE { ?x ");
+      expect(receivedQ).toBe("SELECT ?x WHERE { ?x ");
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // getIndexStats() normalization
+  // -------------------------------------------------------------------------
+
+  describe("getIndexStats() normalization", () => {
+    it("preserves original kebab-case keys alongside camelCase", async () => {
+      const stats = await client.getIndexStats();
+      // camelCase normalized values
+      expect(stats.numTriples).toBe(42);
+      // original keys via index signature
+      expect(stats["num-triples-normal"]).toBe(42);
+      expect(stats["name-index"]).toBe("test-index");
+    });
+
+    it("coerces string values to numbers", async () => {
+      mock.setHandler((_method, url) => {
+        if (url.searchParams.get("cmd") === "stats") {
+          return {
+            body: {
+              "name-index": "coerce-test",
+              "num-triples-normal": "12345",
+              "num-predicates-normal": "99",
+              "num-subjects-normal": "500",
+              "num-objects-normal": "300",
+            },
+          };
+        }
+        return mockStatsResult();
+      });
+
+      const stats = await client.getIndexStats();
+      expect(stats.numTriples).toBe(12345);
+      expect(typeof stats.numTriples).toBe("number");
+    });
+
+    it("defaults to 0 when stats fields are missing", async () => {
+      mock.setHandler((_method, url) => {
+        if (url.searchParams.get("cmd") === "stats") {
+          return { body: {} };
+        }
+        return mockStatsResult();
+      });
+
+      const stats = await client.getIndexStats();
+      expect(stats.numTriples).toBe(0);
+      expect(stats.numPredicates).toBe(0);
+      expect(stats.name).toBe("");
     });
   });
 });

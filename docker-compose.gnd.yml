@@ -1,0 +1,61 @@
+# Docker Compose for QLever with GND Werk authority data.
+#
+# Uses a 50K-object sample from the GND Werk dump (CC0, Deutsche Nationalbibliothek).
+# Source: https://data.dnb.de/opendata/authorities-gnd-werk_lds_20260217.jsonld.gz
+#
+# Generate the fixture first:
+#   pip install ijson
+#   curl -o /tmp/gnd-werk.jsonld.gz https://data.dnb.de/opendata/authorities-gnd-werk_lds_20260217.jsonld.gz
+#   mkdir -p test/fixtures/gnd
+#   python3 scripts/jsonld-to-nt.py -i /tmp/gnd-werk.jsonld.gz --limit 50000 > test/fixtures/gnd/gnd-werk-sample.nt
+#
+# Then start:
+#   docker compose -f docker-compose.gnd.yml up -d --wait
+#   node dist/index.js -e http://localhost:7020
+#   docker compose -f docker-compose.gnd.yml down -v
+
+services:
+  qlever-gnd:
+    image: docker.io/adfreiburg/qlever:latest
+    ports:
+      - "7020:7019"
+    volumes:
+      - qlever-gnd-data:/data
+      - ./test/fixtures/gnd:/fixtures:ro
+    working_dir: /data
+    entrypoint: ["/bin/bash", "-c"]
+    command:
+      - |
+        set -e
+        cp /fixtures/gnd-werk-sample.nt /data/gnd-werk.nt
+        cat > /data/settings.json << 'SETTINGS'
+        {
+          "num-triples-per-batch": 100000,
+          "parser-batch-size": 10000,
+          "ascii-prefixes-only": false,
+          "languages-internal": ["de", "en", ""],
+          "prefixes-external": [
+            "https://d-nb.info/gnd/",
+            "https://d-nb.info/standards/elementset/gnd#",
+            "https://d-nb.info/standards/vocab/gnd/",
+            "http://www.w3.org/",
+            "http://viaf.org/viaf/",
+            "http://www.wikidata.org/entity/"
+          ]
+        }
+        SETTINGS
+        echo "Building GND index..."
+        /qlever/qlever-index -i /data/gnd-werk -f /data/gnd-werk.nt \
+          -F nt -s /data/settings.json 2>&1
+        echo "Starting QLever server..."
+        exec /qlever/qlever-server -i /data/gnd-werk -p 7019 -m 2GB \
+          --default-query-timeout 30s
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:7019/?cmd=stats"]
+      interval: 3s
+      timeout: 5s
+      retries: 30
+      start_period: 30s
+
+volumes:
+  qlever-gnd-data:

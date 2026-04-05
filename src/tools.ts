@@ -7,54 +7,14 @@
 
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
+import { QleverClient } from "./qlever-client.js";
 import {
-  QleverClient,
-  QleverError,
-  type QleverQueryResult,
-} from "./qlever-client.js";
-
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
-
-/** Format a QLever query result as a human-readable text table. */
-function formatResultAsText(result: QleverQueryResult): string {
-  const { selected, res, resultSizeExported, resultSizeTotal, time } = result;
-
-  if (res.length === 0) {
-    return `No results. (${time.total})`;
-  }
-
-  const lines: string[] = [];
-
-  // Header
-  lines.push(selected.join("\t"));
-  lines.push(selected.map((h) => "-".repeat(h.length)).join("\t"));
-
-  // Rows
-  for (const row of res) {
-    lines.push(row.join("\t"));
-  }
-
-  // Footer
-  lines.push("");
-  lines.push(
-    `Showing ${resultSizeExported} of ${resultSizeTotal} results (${time.total})`,
-  );
-
-  return lines.join("\n");
-}
-
-/** Wrap tool handler errors into user-friendly messages. */
-function errorText(err: unknown): string {
-  if (err instanceof QleverError) {
-    return `QLever error: ${err.message}`;
-  }
-  if (err instanceof Error) {
-    return `Error: ${err.message}`;
-  }
-  return `Unknown error: ${String(err)}`;
-}
+  escapeSparqlString,
+  sanitizeIri,
+  formatResultAsText,
+  errorText,
+  PREDICATE_REGEX,
+} from "./format-helpers.js";
 
 // ---------------------------------------------------------------------------
 // Tool registration
@@ -195,7 +155,7 @@ export function registerTools(server: McpServer, client: QleverClient): void {
     "Look up all triples where a given IRI appears as subject or object. " +
       "Returns both outgoing properties (where the entity is the subject) " +
       "and incoming references (where it is the object). " +
-      "Accepts full IRIs (e.g. <http://www.wikidata.org/entity/Q42>) " +
+      "Accepts full IRIs (e.g. '<http://www.wikidata.org/entity/Q42>') " +
       "or prefixed names if the dataset supports them.",
     {
       iri: z
@@ -213,15 +173,14 @@ export function registerTools(server: McpServer, client: QleverClient): void {
         .describe("Maximum number of triples to return (default: 100, max 10000)"),
     },
     async ({ iri, limit }) => {
-      // Ensure the IRI is wrapped in angle brackets if not already
-      const wrappedIri = iri.startsWith("<") ? iri : `<${iri}>`;
+      try {
+        const wrappedIri = sanitizeIri(iri);
 
-      const query = `
+        const query = `
 SELECT ?predicate ?object WHERE {
   ${wrappedIri} ?predicate ?object .
 } LIMIT ${limit}`;
 
-      try {
         const outgoing = await client.query(query, { maxRows: limit });
 
         const reverseQuery = `
@@ -265,7 +224,7 @@ SELECT ?subject ?predicate WHERE {
       label_predicate: z
         .string()
         .regex(
-          /^([a-zA-Z_][a-zA-Z0-9_.\-]*:[a-zA-Z0-9_.\-]*|:[a-zA-Z0-9_.\-]+|<[^>]+>)$/,
+          PREDICATE_REGEX,
           "Must be a prefixed name (e.g. 'rdfs:label') or a full IRI (e.g. '<http://...>')",
         )
         .optional()
@@ -285,12 +244,13 @@ SELECT ?subject ?predicate WHERE {
         .describe("Maximum number of results (default: 20, max 1000)"),
     },
     async ({ search_term, label_predicate, limit }) => {
+      const escaped = escapeSparqlString(search_term);
       const query = `
 PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#>
 PREFIX schema: <http://schema.org/>
 SELECT ?entity ?label WHERE {
   ?entity ${label_predicate} ?label .
-  FILTER(CONTAINS(LCASE(STR(?label)), LCASE("${search_term.replace(/"/g, '\\"')}")))
+  FILTER(CONTAINS(LCASE(STR(?label)), LCASE("${escaped}")))
 } LIMIT ${limit}`;
 
       try {
@@ -324,15 +284,23 @@ SELECT ?entity ?label WHERE {
         .optional()
         .default(50)
         .describe("Maximum number of predicates to return (default: 50, max 1000)"),
+      timeout: z
+        .string()
+        .regex(
+          /^\d+(ns|us|ms|s|min|h)$/,
+          "Must be a QLever duration (e.g. '30s', '5000ms', '2min')",
+        )
+        .optional()
+        .describe("Query timeout (default: server-configured timeout)"),
     },
-    async ({ limit }) => {
+    async ({ limit, timeout }) => {
       const query = `
 SELECT ?predicate (COUNT(?predicate) AS ?count) WHERE {
   ?s ?predicate ?o .
 } GROUP BY ?predicate ORDER BY DESC(?count) LIMIT ${limit}`;
 
       try {
-        const result = await client.query(query);
+        const result = await client.query(query, { timeout });
         return {
           content: [{ type: "text", text: formatResultAsText(result) }],
         };

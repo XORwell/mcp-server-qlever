@@ -678,7 +678,7 @@ describe("Advanced MCP Tools", () => {
         name: "sparql_update",
         arguments: {
           update: "INSERT DATA { <http://example.org/s> <http://example.org/p> <http://example.org/o> }",
-          graph_uri: "http://example.org/mygraph",
+          graph_uri: "<http://example.org/mygraph>",
         },
       });
 

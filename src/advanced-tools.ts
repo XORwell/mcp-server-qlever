@@ -7,58 +7,14 @@
 
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
+import { QleverClient } from "./qlever-client.js";
 import {
-  QleverClient,
-  QleverError,
-  type QleverQueryResult,
-} from "./qlever-client.js";
-
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
-
-/** Format a QLever query result as a human-readable text table. */
-function formatResultAsText(result: QleverQueryResult): string {
-  const { selected, res, resultSizeExported, resultSizeTotal, time } = result;
-
-  if (res.length === 0) {
-    return `No results. (${time.total})`;
-  }
-
-  const lines: string[] = [];
-
-  // Header
-  lines.push(selected.join("\t"));
-  lines.push(selected.map((h) => "-".repeat(h.length)).join("\t"));
-
-  // Rows
-  for (const row of res) {
-    lines.push(row.join("\t"));
-  }
-
-  // Footer
-  lines.push("");
-  lines.push(
-    `Showing ${resultSizeExported} of ${resultSizeTotal} results (${time.total})`,
-  );
-
-  return lines.join("\n");
-}
-
-/** Wrap tool handler errors into user-friendly messages. */
-function errorText(err: unknown): string {
-  if (err instanceof QleverError) {
-    return `QLever error: ${err.message}`;
-  }
-  if (err instanceof Error) {
-    return `Error: ${err.message}`;
-  }
-  return `Unknown error: ${String(err)}`;
-}
-
-/** Label predicate regex — matches prefixed names or full IRIs. */
-const labelPredicateRegex =
-  /^([a-zA-Z_][a-zA-Z0-9_.\-]*:[a-zA-Z0-9_.\-]*|<[^>]+>)$/;
+  escapeSparqlString,
+  sanitizeIri,
+  formatResultAsText,
+  errorText,
+  PREDICATE_REGEX,
+} from "./format-helpers.js";
 
 // ---------------------------------------------------------------------------
 // Tool registration
@@ -82,7 +38,7 @@ export function registerAdvancedTools(
       context: z
         .string()
         .optional()
-        .describe("Additional context for autocompletion"),
+        .describe("Additional context for autocompletion (e.g. surrounding query text)"),
       entity_name: z
         .string()
         .optional()
@@ -138,31 +94,9 @@ export function registerAdvancedTools(
     },
     async ({ query }) => {
       try {
-        const url = new URL(client["endpoint"]);
-        url.searchParams.set("query", query);
-        url.searchParams.set("action", "plan");
-
-        const res = await globalThis.fetch(url.toString(), {
-          method: "GET",
-          headers: {
-            Accept: "application/json",
-            ...(client.hasAccessToken
-              ? { Authorization: `Bearer ${client["accessToken"]}` }
-              : {}),
-          },
-        });
-
-        const text = await res.text();
-        try {
-          const plan = JSON.parse(text);
-          return {
-            content: [{ type: "text", text: JSON.stringify(plan, null, 2) }],
-          };
-        } catch {
-          return {
-            content: [{ type: "text", text: text }],
-          };
-        }
+        const plan = await client.analyzeQuery(query);
+        const text = typeof plan === "string" ? plan : JSON.stringify(plan, null, 2);
+        return { content: [{ type: "text", text }] };
       } catch (err) {
         return {
           content: [{ type: "text", text: errorText(err) }],
@@ -233,10 +167,12 @@ export function registerAdvancedTools(
         .describe("Maximum number of results (default: 20, max: 1000)"),
     },
     async ({ keywords, filter_type, limit }) => {
-      const escapedKeywords = keywords.replace(/"/g, '\\"');
-      const typeFilter = filter_type
-        ? `\n  ?entity a <${filter_type.replace(/^<|>$/g, "")}> .`
-        : "";
+      const escapedKeywords = escapeSparqlString(keywords);
+      let typeFilter = "";
+      if (filter_type) {
+        const safeIri = sanitizeIri(filter_type);
+        typeFilter = `\n  ?entity a ${safeIri} .`;
+      }
 
       const query = `SELECT ?entity ?score ?text WHERE {
   ?text <ql:contains-entity> ?entity .
@@ -264,19 +200,23 @@ export function registerAdvancedTools(
   const spatialParams = z.discriminatedUnion("mode", [
     z.object({
       mode: z.literal("radius"),
-      lat: z.number().describe("Latitude of the center point"),
-      lon: z.number().describe("Longitude of the center point"),
-      radius_km: z.number().positive().describe("Search radius in kilometers"),
+      lat: z.number().finite().min(-90).max(90).describe("Latitude of the center point (-90 to 90)"),
+      lon: z.number().finite().min(-180).max(180).describe("Longitude of the center point (-180 to 180)"),
+      radius_km: z.number().finite().positive().describe("Search radius in kilometers"),
       type_filter: z.string().optional().describe("Optional type IRI to filter entities"),
       coordinate_predicate: z
         .string()
+        .regex(
+          PREDICATE_REGEX,
+          "Must be a prefixed name or a full IRI (e.g. '<http://...>')",
+        )
         .optional()
         .default("<http://www.wikidata.org/prop/direct/P625>")
         .describe("Predicate for coordinates (default: wdt:P625)"),
       label_predicate: z
         .string()
         .regex(
-          labelPredicateRegex,
+          PREDICATE_REGEX,
           "Must be a prefixed name (e.g. 'rdfs:label') or a full IRI (e.g. '<http://...>')",
         )
         .optional()
@@ -293,20 +233,24 @@ export function registerAdvancedTools(
     }),
     z.object({
       mode: z.literal("bbox"),
-      min_lat: z.number().describe("Minimum latitude of bounding box"),
-      max_lat: z.number().describe("Maximum latitude of bounding box"),
-      min_lon: z.number().describe("Minimum longitude of bounding box"),
-      max_lon: z.number().describe("Maximum longitude of bounding box"),
+      min_lat: z.number().finite().min(-90).max(90).describe("Minimum latitude of bounding box (-90 to 90)"),
+      max_lat: z.number().finite().min(-90).max(90).describe("Maximum latitude of bounding box (-90 to 90)"),
+      min_lon: z.number().finite().min(-180).max(180).describe("Minimum longitude of bounding box (-180 to 180)"),
+      max_lon: z.number().finite().min(-180).max(180).describe("Maximum longitude of bounding box (-180 to 180)"),
       type_filter: z.string().optional().describe("Optional type IRI to filter entities"),
       coordinate_predicate: z
         .string()
+        .regex(
+          PREDICATE_REGEX,
+          "Must be a prefixed name or a full IRI (e.g. '<http://...>')",
+        )
         .optional()
         .default("<http://www.wikidata.org/prop/direct/P625>")
         .describe("Predicate for coordinates (default: wdt:P625)"),
       label_predicate: z
         .string()
         .regex(
-          labelPredicateRegex,
+          PREDICATE_REGEX,
           "Must be a prefixed name (e.g. 'rdfs:label') or a full IRI (e.g. '<http://...>')",
         )
         .optional()
@@ -331,9 +275,11 @@ export function registerAdvancedTools(
     async ({ params }) => {
       const coordPred = params.coordinate_predicate;
       const labelPred = params.label_predicate;
-      const typeFilter = params.type_filter
-        ? `\n  ?entity a <${params.type_filter.replace(/^<|>$/g, "")}> .`
-        : "";
+      let typeFilter = "";
+      if (params.type_filter) {
+        const safeIri = sanitizeIri(params.type_filter);
+        typeFilter = `\n  ?entity a ${safeIri} .`;
+      }
 
       let query: string;
 
@@ -383,13 +329,17 @@ SELECT ?entity ?label ?coord WHERE {
   server.tool(
     "sparql_update",
     "Execute a SPARQL 1.1 Update. REQUIRES access token. " +
-      "Use dry_run:true to preview. Destructive operations (DROP ALL, CLEAR ALL) require confirm:true.",
+      "Use dry_run:true to preview. Destructive operations (DROP/CLEAR on ALL, DEFAULT, NAMED) require confirm:true.",
     {
       update: z
         .string()
         .describe("The SPARQL Update statement to execute"),
       graph_uri: z
         .string()
+        .regex(
+          PREDICATE_REGEX,
+          "Must be a prefixed name or a full IRI (e.g. '<http://...>')",
+        )
         .optional()
         .describe("Optional target graph URI"),
       dry_run: z
@@ -417,14 +367,14 @@ SELECT ?entity ?label ?coord WHERE {
         };
       }
 
-      // Dangerous operation detection
-      const dangerousPattern = /DROP\s+(SILENT\s+)?ALL|CLEAR\s+(SILENT\s+)?ALL/i;
+      // Dangerous operation detection — covers ALL, DEFAULT, NAMED targets
+      const dangerousPattern = /\b(DROP|CLEAR)\s+(SILENT\s+)?(ALL|DEFAULT|NAMED)\b/i;
       if (dangerousPattern.test(update) && !confirm) {
         return {
           content: [
             {
               type: "text",
-              text: "Destructive operation detected (DROP ALL or CLEAR ALL). " +
+              text: "Destructive operation detected (DROP/CLEAR on ALL, DEFAULT, or NAMED). " +
                 "Set confirm: true to proceed. This operation cannot be undone.",
             },
           ],

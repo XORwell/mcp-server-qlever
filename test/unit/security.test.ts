@@ -15,9 +15,11 @@ import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { QleverClient, QleverError } from "../../src/qlever-client.js";
 import { registerTools } from "../../src/tools.js";
+import { registerAdvancedTools } from "../../src/advanced-tools.js";
 import {
   MockQleverServer,
   mockQueryResult,
+  mockStatsResult,
   type MockResponse,
 } from "../mock-server.js";
 
@@ -46,9 +48,14 @@ describe("Security & Input Validation", () => {
   beforeEach(async () => {
     mock.setHandler(defaultHandler);
 
-    const qleverClient = new QleverClient({ endpoint: mock.url, defaultTimeout: "10s" });
+    const qleverClient = new QleverClient({
+      endpoint: mock.url,
+      defaultTimeout: "10s",
+      accessToken: "test-token",
+    });
     const mcpServer = new McpServer({ name: "test-security", version: "0.0.1" });
     registerTools(mcpServer, qleverClient);
+    registerAdvancedTools(mcpServer, qleverClient);
 
     mcpClient = new Client({ name: "test-client", version: "0.0.1" });
     const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
@@ -112,7 +119,7 @@ describe("Security & Input Validation", () => {
       // Edge cases
       [":localName", "empty prefix (default namespace)"],
       ["a:b", "minimal prefixed name"],
-      ["_:x", "underscore prefix"],
+      ["ns_:prop", "underscore in prefix"],
       ["my.ontology:some-prop", "dots and hyphens"],
     ];
 
@@ -434,7 +441,349 @@ describe("Security & Input Validation", () => {
   });
 
   // -----------------------------------------------------------------------
-  // 6. QleverError properties
+  // 6. search_entities SPARQL string injection prevention
+  // -----------------------------------------------------------------------
+
+  describe("search_entities — SPARQL string injection prevention", () => {
+    it("escapes backslash in search_term (prevents literal breakout)", async () => {
+      let receivedQuery = "";
+      mock.setHandler((_m, _u, body) => {
+        const params = new URLSearchParams(body);
+        receivedQuery = params.get("query") ?? "";
+        return mockQueryResult({ selected: ["?entity", "?label"], res: [] });
+      });
+
+      // A trailing backslash would escape the closing quote without proper escaping
+      await mcpClient.callTool({
+        name: "search_entities",
+        arguments: { search_term: "test\\" },
+      });
+
+      // The backslash must be doubled in the query
+      expect(receivedQuery).toContain("test\\\\");
+      // The query must still have a valid closing quote after the escaped content
+      expect(receivedQuery).not.toMatch(/test\\"/);
+    });
+
+    it("escapes double-quote in search_term", async () => {
+      let receivedQuery = "";
+      mock.setHandler((_m, _u, body) => {
+        const params = new URLSearchParams(body);
+        receivedQuery = params.get("query") ?? "";
+        return mockQueryResult({ selected: ["?entity", "?label"], res: [] });
+      });
+
+      await mcpClient.callTool({
+        name: "search_entities",
+        arguments: { search_term: 'say "hello"' },
+      });
+
+      expect(receivedQuery).toContain('say \\"hello\\"');
+    });
+
+    it("escapes newline in search_term (prevents multi-line literal)", async () => {
+      let receivedQuery = "";
+      mock.setHandler((_m, _u, body) => {
+        const params = new URLSearchParams(body);
+        receivedQuery = params.get("query") ?? "";
+        return mockQueryResult({ selected: ["?entity", "?label"], res: [] });
+      });
+
+      await mcpClient.callTool({
+        name: "search_entities",
+        arguments: { search_term: "line1\nline2" },
+      });
+
+      // Newline must be escaped, not raw
+      expect(receivedQuery).not.toContain("line1\nline2");
+      expect(receivedQuery).toContain("line1\\nline2");
+    });
+
+    it("escapes backslash-quote combo (classic injection vector)", async () => {
+      let receivedQuery = "";
+      mock.setHandler((_m, _u, body) => {
+        const params = new URLSearchParams(body);
+        receivedQuery = params.get("query") ?? "";
+        return mockQueryResult({ selected: ["?entity", "?label"], res: [] });
+      });
+
+      // \" in input — without proper escaping, this closes the literal
+      await mcpClient.callTool({
+        name: "search_entities",
+        arguments: { search_term: '\\" ) } DELETE WHERE { ?s ?p ?o' },
+      });
+
+      // The backslash must be escaped (\\) and the quote must be escaped (\")
+      // so the entire payload stays inside the SPARQL string literal.
+      // In the query: the \" becomes \\\\" (escaped backslash + escaped quote)
+      expect(receivedQuery).toContain('\\\\\\"');
+      // The FILTER must still be properly closed — the literal is not broken
+      expect(receivedQuery).toMatch(/FILTER\(CONTAINS/);
+      expect(receivedQuery).toMatch(/\)\)\s*\n\}/);
+    });
+  });
+
+  // -----------------------------------------------------------------------
+  // 7. describe_entity IRI injection prevention
+  // -----------------------------------------------------------------------
+
+  describe("describe_entity — IRI injection prevention", () => {
+    const maliciousIris: Array<[string, string]> = [
+      // Closing bracket injection
+      ["http://example.org/test> } DELETE WHERE { ?s ?p ?o", "closing bracket injection"],
+      // Space in IRI
+      ["http://example.org/test foo", "space injection"],
+      // Newline in IRI
+      ["http://example.org/test\nDELETE", "newline injection"],
+      // Backslash in IRI
+      ["http://example.org/test\\", "backslash injection"],
+      // Curly braces
+      ["http://example.org/{inject}", "curly brace injection"],
+      // Pipe
+      ["http://example.org/test|inject", "pipe injection"],
+    ];
+
+    for (const [iri, description] of maliciousIris) {
+      it(`rejects ${description}`, async () => {
+        const result = await mcpClient.callTool({
+          name: "describe_entity",
+          arguments: { iri },
+        });
+
+        expect(result.isError, `should reject: ${description}`).toBe(true);
+        const text = getText(result);
+        expect(text).toContain("illegal characters");
+      });
+    }
+
+    it("rejects unclosed angle bracket", async () => {
+      const result = await mcpClient.callTool({
+        name: "describe_entity",
+        arguments: { iri: "<http://example.org/test" },
+      });
+
+      expect(result.isError).toBe(true);
+      const text = getText(result);
+      expect(text).toContain("does not end with '>'");
+    });
+
+    it("rejects empty IRI", async () => {
+      const result = await mcpClient.callTool({
+        name: "describe_entity",
+        arguments: { iri: "" },
+      });
+
+      expect(result.isError).toBe(true);
+    });
+
+    it("accepts valid full IRI and wraps it", async () => {
+      let receivedQuery = "";
+      mock.setHandler((_m, _u, body) => {
+        const params = new URLSearchParams(body);
+        receivedQuery = params.get("query") ?? "";
+        return mockQueryResult({ selected: ["?predicate", "?object"], res: [] });
+      });
+
+      await mcpClient.callTool({
+        name: "describe_entity",
+        arguments: { iri: "http://example.org/valid" },
+      });
+
+      expect(receivedQuery).toContain("<http://example.org/valid>");
+    });
+
+    it("accepts valid bracketed IRI", async () => {
+      let receivedQuery = "";
+      mock.setHandler((_m, _u, body) => {
+        const params = new URLSearchParams(body);
+        receivedQuery = params.get("query") ?? "";
+        return mockQueryResult({ selected: ["?predicate", "?object"], res: [] });
+      });
+
+      await mcpClient.callTool({
+        name: "describe_entity",
+        arguments: { iri: "<http://example.org/valid>" },
+      });
+
+      expect(receivedQuery).toContain("<http://example.org/valid>");
+    });
+
+    it("accepts valid prefixed name", async () => {
+      const receivedQueries: string[] = [];
+      mock.setHandler((_m, _u, body) => {
+        const params = new URLSearchParams(body);
+        receivedQueries.push(params.get("query") ?? "");
+        return mockQueryResult({ selected: ["?predicate", "?object"], res: [] });
+      });
+
+      await mcpClient.callTool({
+        name: "describe_entity",
+        arguments: { iri: "wdt:Q42" },
+      });
+
+      // First query: outgoing (entity is subject)
+      expect(receivedQueries[0]).toContain("wdt:Q42 ?predicate");
+      // Second query: incoming (entity is object)
+      expect(receivedQueries[1]).toContain("?predicate wdt:Q42");
+    });
+  });
+
+  // -----------------------------------------------------------------------
+  // 8. sparql_update — broadened dangerous operation detection
+  // -----------------------------------------------------------------------
+
+  describe("sparql_update — dangerous operation detection", () => {
+    const dangerousOps: Array<[string, string]> = [
+      ["DROP ALL", "DROP ALL"],
+      ["CLEAR ALL", "CLEAR ALL"],
+      ["DROP SILENT ALL", "DROP SILENT ALL"],
+      ["CLEAR SILENT ALL", "CLEAR SILENT ALL"],
+      ["DROP DEFAULT", "DROP DEFAULT"],
+      ["CLEAR DEFAULT", "CLEAR DEFAULT"],
+      ["DROP NAMED", "DROP NAMED"],
+      ["CLEAR NAMED", "CLEAR NAMED"],
+      ["DROP SILENT DEFAULT", "DROP SILENT DEFAULT"],
+      ["CLEAR SILENT NAMED", "CLEAR SILENT NAMED"],
+      // Case insensitive
+      ["drop all", "drop all (lowercase)"],
+      ["Drop Named", "Drop Named (mixed case)"],
+    ];
+
+    for (const [update, description] of dangerousOps) {
+      it(`blocks ${description} without confirm`, async () => {
+        const result = await mcpClient.callTool({
+          name: "sparql_update",
+          arguments: { update },
+        });
+
+        expect(result.isError, `should block: ${description}`).toBe(true);
+        const text = getText(result);
+        expect(text).toContain("Destructive operation detected");
+      });
+    }
+
+    const safeOps: Array<[string, string]> = [
+      ["INSERT DATA { <a> <b> <c> }", "INSERT DATA"],
+      ["DELETE WHERE { <a> <b> <c> }", "DELETE WHERE"],
+      ["DROP GRAPH <http://example.org/g>", "DROP specific GRAPH"],
+      ["CLEAR GRAPH <http://example.org/g>", "CLEAR specific GRAPH"],
+    ];
+
+    for (const [update, description] of safeOps) {
+      it(`allows ${description} without confirm`, async () => {
+        mock.setHandler(() => ({
+          body: { message: "OK" },
+        }));
+
+        const result = await mcpClient.callTool({
+          name: "sparql_update",
+          arguments: { update },
+        });
+
+        expect(result.isError, `should allow: ${description}`).toBeFalsy();
+      });
+    }
+  });
+
+  // -----------------------------------------------------------------------
+  // 9. sparql_update — graph_uri validation
+  // -----------------------------------------------------------------------
+
+  describe("sparql_update — graph_uri validation", () => {
+    it("rejects malicious graph_uri with injection payload", async () => {
+      const result = await mcpClient.callTool({
+        name: "sparql_update",
+        arguments: {
+          update: "INSERT DATA { <a> <b> <c> }",
+          graph_uri: "http://x> } DROP ALL; #",
+        },
+      });
+      expect(result.isError).toBe(true);
+    });
+
+    it("accepts valid graph_uri IRI", async () => {
+      mock.setHandler(() => ({ body: { message: "OK" } }));
+      const result = await mcpClient.callTool({
+        name: "sparql_update",
+        arguments: {
+          update: "INSERT DATA { <a> <b> <c> }",
+          graph_uri: "<http://example.org/graph1>",
+        },
+      });
+      expect(result.isError).toBeFalsy();
+    });
+  });
+
+  // -----------------------------------------------------------------------
+  // 10. search_fulltext — SPARQL injection via keywords
+  // -----------------------------------------------------------------------
+
+  describe("search_fulltext — keyword injection prevention", () => {
+    it("escapes backslash in keywords", async () => {
+      let receivedQuery = "";
+      mock.setHandler((_m, _u, body) => {
+        const params = new URLSearchParams(body);
+        receivedQuery = params.get("query") ?? "";
+        return mockQueryResult({ selected: ["?entity", "?score", "?text"], res: [] });
+      });
+
+      await mcpClient.callTool({
+        name: "search_fulltext",
+        arguments: { keywords: "test\\" },
+      });
+
+      expect(receivedQuery).toContain("test\\\\");
+    });
+
+    it("escapes quotes in keywords", async () => {
+      let receivedQuery = "";
+      mock.setHandler((_m, _u, body) => {
+        const params = new URLSearchParams(body);
+        receivedQuery = params.get("query") ?? "";
+        return mockQueryResult({ selected: ["?entity", "?score", "?text"], res: [] });
+      });
+
+      await mcpClient.callTool({
+        name: "search_fulltext",
+        arguments: { keywords: 'say "hello"' },
+      });
+
+      expect(receivedQuery).toContain('say \\"hello\\"');
+    });
+
+    it("rejects malicious filter_type IRI", async () => {
+      const result = await mcpClient.callTool({
+        name: "search_fulltext",
+        arguments: {
+          keywords: "test",
+          filter_type: "http://example.org/Q5> } DELETE WHERE { ?s ?p ?o",
+        },
+      });
+
+      expect(result.isError).toBe(true);
+      const text = getText(result);
+      expect(text).toContain("illegal characters");
+    });
+
+    it("accepts valid filter_type IRI", async () => {
+      mock.setHandler((_m, _u, body) => {
+        return mockQueryResult({ selected: ["?entity", "?score", "?text"], res: [] });
+      });
+
+      const result = await mcpClient.callTool({
+        name: "search_fulltext",
+        arguments: {
+          keywords: "test",
+          filter_type: "http://www.wikidata.org/entity/Q5",
+        },
+      });
+
+      expect(result.isError).toBeFalsy();
+    });
+  });
+
+  // -----------------------------------------------------------------------
+  // 10. QleverError properties
   // -----------------------------------------------------------------------
 
   describe("QleverError properties", () => {

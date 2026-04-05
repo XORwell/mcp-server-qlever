@@ -11,15 +11,22 @@ import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { QleverClient } from "../../src/qlever-client.js";
 import { registerTools } from "../../src/tools.js";
-import { containerSuite, createTestClient, ENTITIES } from "../helpers.js";
+import { isQleverAvailable, createTestClient, ENTITIES } from "../helpers.js";
 
-let available = false;
 let client: QleverClient;
 let mcpClient: Client;
 
+// Resolve availability once at module scope so it's ready before tests run.
+const available = isQleverAvailable();
+
 beforeAll(async () => {
-  available = await containerSuite();
-  if (!available) return;
+  if (!(await available)) {
+    console.warn(
+      "⚠ QLever container not available — skipping integration tests.\n" +
+        "  Start it with: docker compose -f docker-compose.test.yml up -d --wait",
+    );
+    return;
+  }
 
   client = createTestClient();
 
@@ -32,6 +39,10 @@ beforeAll(async () => {
   await mcpClient.connect(ct);
 });
 
+async function skipIfUnavailable(): Promise<boolean> {
+  return !(await available);
+}
+
 function getText(result: Awaited<ReturnType<Client["callTool"]>>): string {
   return (result.content as Array<{ type: string; text: string }>)[0].text;
 }
@@ -41,7 +52,8 @@ function getText(result: Awaited<ReturnType<Client["callTool"]>>): string {
 // ---------------------------------------------------------------------------
 
 describe("Integration: QleverClient", () => {
-  it.skipIf(!available)("retrieves index stats with positive counts", async () => {
+  it("retrieves index stats with positive counts", async () => {
+    if (await skipIfUnavailable()) return;
     const stats = await client.getIndexStats();
     expect(stats.numTriples).toBeGreaterThan(0);
     expect(stats.numPredicates).toBeGreaterThan(0);
@@ -49,7 +61,8 @@ describe("Integration: QleverClient", () => {
     expect(stats.numObjects).toBeGreaterThan(0);
   });
 
-  it.skipIf(!available)("executes a simple SELECT query", async () => {
+  it("executes a simple SELECT query", async () => {
+    if (await skipIfUnavailable()) return;
     const result = await client.query(
       "SELECT ?s ?p ?o WHERE { ?s ?p ?o } LIMIT 5",
     );
@@ -59,7 +72,8 @@ describe("Integration: QleverClient", () => {
     expect(result.selected).toEqual(["?s", "?p", "?o"]);
   });
 
-  it.skipIf(!available)("finds Einstein by label in the test dataset", async () => {
+  it("finds Einstein by label in the test dataset", async () => {
+    if (await skipIfUnavailable()) return;
     const result = await client.query(`
       PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#>
       SELECT ?label WHERE {
@@ -71,13 +85,15 @@ describe("Integration: QleverClient", () => {
     expect(result.res[0][0]).toContain("Albert Einstein");
   });
 
-  it.skipIf(!available)("throws QleverError on invalid SPARQL", async () => {
+  it("throws QleverError on invalid SPARQL", async () => {
+    if (await skipIfUnavailable()) return;
     await expect(
       client.query("THIS IS NOT SPARQL"),
     ).rejects.toThrow();
   });
 
-  it.skipIf(!available)("counts all triples in the dataset", async () => {
+  it("counts all triples in the dataset", async () => {
+    if (await skipIfUnavailable()) return;
     const result = await client.query(
       "SELECT (COUNT(*) AS ?count) WHERE { ?s ?p ?o }",
     );
@@ -93,7 +109,8 @@ describe("Integration: QleverClient", () => {
 // ---------------------------------------------------------------------------
 
 describe("Integration: MCP Tools", () => {
-  it.skipIf(!available)("sparql_query returns formatted text with headers and footer", async () => {
+  it("sparql_query returns formatted text with headers and footer", async () => {
+    if (await skipIfUnavailable()) return;
     const result = await mcpClient.callTool({
       name: "sparql_query",
       arguments: { query: "SELECT ?s ?p ?o WHERE { ?s ?p ?o } LIMIT 3" },
@@ -106,7 +123,8 @@ describe("Integration: MCP Tools", () => {
     expect(text).toContain("Showing");
   });
 
-  it.skipIf(!available)("sparql_query_json returns parseable JSON with OK status", async () => {
+  it("sparql_query_json returns parseable JSON with OK status", async () => {
+    if (await skipIfUnavailable()) return;
     const result = await mcpClient.callTool({
       name: "sparql_query_json",
       arguments: { query: "SELECT ?s WHERE { ?s ?p ?o } LIMIT 1" },
@@ -118,7 +136,8 @@ describe("Integration: MCP Tools", () => {
     expect(Array.isArray(parsed.res)).toBe(true);
   });
 
-  it.skipIf(!available)("get_index_stats returns dataset info with triple count", async () => {
+  it("get_index_stats returns dataset info with triple count", async () => {
+    if (await skipIfUnavailable()) return;
     const result = await mcpClient.callTool({
       name: "get_index_stats",
       arguments: {},
@@ -129,7 +148,8 @@ describe("Integration: MCP Tools", () => {
     expect(stats.numPredicates).toBeGreaterThan(0);
   });
 
-  it.skipIf(!available)("describe_entity returns Einstein's outgoing properties", async () => {
+  it("describe_entity returns Einstein's outgoing properties", async () => {
+    if (await skipIfUnavailable()) return;
     const result = await mcpClient.callTool({
       name: "describe_entity",
       arguments: { iri: ENTITIES.EINSTEIN },
@@ -138,11 +158,11 @@ describe("Integration: MCP Tools", () => {
     const text = getText(result);
     expect(text).toContain("Outgoing properties");
     expect(text).toContain("Incoming references");
-    // Should contain data about Einstein
     expect(text).toContain("Albert Einstein");
   });
 
-  it.skipIf(!available)("search_entities finds Curie by name", async () => {
+  it("search_entities finds Curie by name", async () => {
+    if (await skipIfUnavailable()) return;
     const result = await mcpClient.callTool({
       name: "search_entities",
       arguments: { search_term: "Curie" },
@@ -152,7 +172,8 @@ describe("Integration: MCP Tools", () => {
     expect(text).toContain("Marie_Curie");
   });
 
-  it.skipIf(!available)("get_predicates lists dataset predicates with counts", async () => {
+  it("get_predicates lists dataset predicates with counts", async () => {
+    if (await skipIfUnavailable()) return;
     const result = await mcpClient.callTool({
       name: "get_predicates",
       arguments: {},
@@ -161,7 +182,6 @@ describe("Integration: MCP Tools", () => {
     const text = getText(result);
     expect(text).toContain("?predicate");
     expect(text).toContain("?count");
-    // Should contain at least rdf:type and rdfs:label
     expect(text).toContain("type");
     expect(text).toContain("label");
   });

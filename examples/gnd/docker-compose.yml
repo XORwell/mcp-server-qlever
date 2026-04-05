@@ -1,0 +1,116 @@
+# GND Werk all-in-one: downloads DNB authority data, builds QLever index, starts MCP server.
+#
+# First run downloads ~90MB, converts JSON-LD → N-Triples, and builds the index.
+# Subsequent runs start in seconds (index is persisted in a Docker volume).
+#
+# Data source: Deutsche Nationalbibliothek (DNB), CC0 license
+# https://data.dnb.de/opendata/
+#
+# Usage:
+#   docker compose up -d --wait
+#   # QLever SPARQL endpoint: http://localhost:7020
+#   # MCP server (Claude Code):
+#   claude mcp add gnd -- docker run --rm -i --network=host \
+#     ghcr.io/xorwell/mcp-server-qlever:latest -e http://localhost:7020
+
+services:
+  qlever-gnd:
+    image: docker.io/adfreiburg/qlever:latest
+    ports:
+      - "${QLEVER_PORT:-7020}:7019"
+    volumes:
+      - gnd-index:/data
+    working_dir: /data
+    entrypoint: ["/bin/bash", "-c"]
+    command:
+      - |
+        set -e
+
+        if [ -f /data/index.ready ]; then
+          echo "GND index already built, starting server..."
+          exec /qlever/qlever-server -i /data/gnd-werk -p 7019 \
+            -m $${QLEVER_MEMORY:-2GB} --default-query-timeout 30s
+        fi
+
+        echo "=== GND Werk Setup ==="
+        echo "Step 1/3: Downloading GND Werk dump from DNB (~90MB)..."
+        apt-get update -qq && apt-get install -y -qq python3 python3-pip > /dev/null 2>&1
+        pip3 install --quiet ijson
+
+        curl -fsSL -o /tmp/gnd-werk.jsonld.gz \
+          "https://data.dnb.de/opendata/authorities-gnd-werk_lds_20260217.jsonld.gz"
+
+        echo "Step 2/3: Converting JSON-LD → N-Triples..."
+        cat > /tmp/convert.py << 'PYEOF'
+        import gzip, json, sys, ijson
+        def escape(s):
+            return s.replace("\\","\\\\").replace('"','\\"').replace("\n","\\n").replace("\r","\\r").replace("\t","\\t")
+        def fmt(v):
+            if "@id" in v:
+                uri = v["@id"]
+                return uri if uri.startswith("_:") else f"<{uri}>"
+            if "@value" in v:
+                e = escape(str(v["@value"]))
+                if "@language" in v: return f'"{e}"@{v["@language"]}'
+                if "@type" in v: return f'"{e}"^^<{v["@type"]}>'
+                return f'"{e}"'
+            return None
+        count = 0
+        with gzip.open("/tmp/gnd-werk.jsonld.gz", "rb") as f:
+            for obj in ijson.items(f, "item.item"):
+                sid = obj.get("@id","")
+                if not sid: continue
+                s = sid if sid.startswith("_:") else f"<{sid}>"
+                for t in (obj.get("@type") or []):
+                    sys.stdout.write(f'{s} <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <{t}> .\n')
+                    count += 1
+                for p, vals in obj.items():
+                    if p.startswith("@"): continue
+                    for v in (vals if isinstance(vals, list) else [vals]):
+                        if isinstance(v, dict):
+                            o = fmt(v)
+                            if o:
+                                sys.stdout.write(f'{s} <{p}> {o} .\n')
+                                count += 1
+        print(f"Converted {count:,} triples", file=sys.stderr)
+        PYEOF
+        python3 /tmp/convert.py > /data/gnd-werk.nt
+
+        echo "Step 3/3: Building QLever index..."
+        cat > /data/settings.json << 'SETTINGS'
+        {
+          "num-triples-per-batch": 500000,
+          "parser-batch-size": 50000,
+          "ascii-prefixes-only": false,
+          "languages-internal": ["de", "en", ""],
+          "prefixes-external": [
+            "https://d-nb.info/gnd/",
+            "https://d-nb.info/standards/elementset/gnd#",
+            "https://d-nb.info/standards/vocab/gnd/",
+            "http://www.w3.org/",
+            "http://viaf.org/viaf/",
+            "http://www.wikidata.org/entity/"
+          ]
+        }
+        SETTINGS
+        /qlever/qlever-index -i /data/gnd-werk -f /data/gnd-werk.nt \
+          -F nt -s /data/settings.json 2>&1
+
+        # Clean up to save space
+        rm -f /data/gnd-werk.nt /tmp/gnd-werk.jsonld.gz
+        touch /data/index.ready
+
+        echo "=== GND Werk ready! ==="
+        exec /qlever/qlever-server -i /data/gnd-werk -p 7019 \
+          -m $${QLEVER_MEMORY:-2GB} --default-query-timeout 30s
+    environment:
+      - QLEVER_MEMORY=${QLEVER_MEMORY:-2GB}
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:7019/?cmd=stats"]
+      interval: 5s
+      timeout: 5s
+      retries: 60
+      start_period: 120s
+
+volumes:
+  gnd-index:

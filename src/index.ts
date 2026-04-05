@@ -16,12 +16,16 @@
  *   QLEVER_TIMEOUT       — Default query timeout (e.g. "30s")
  */
 
+import { createRequire } from "node:module";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { QleverClient } from "./qlever-client.js";
 import { registerTools } from "./tools.js";
 import { registerAdvancedTools } from "./advanced-tools.js";
 import { registerPrompts } from "./prompts.js";
+
+const require = createRequire(import.meta.url);
+const { version: PKG_VERSION } = require("../package.json") as { version: string };
 
 // ---------------------------------------------------------------------------
 // CLI argument parsing
@@ -61,7 +65,7 @@ function parseArgs(argv: string[]): CliArgs {
         break;
       case "--version":
       case "-v":
-        console.error("mcp-server-qlever 0.2.0");
+        console.error(`mcp-server-qlever ${PKG_VERSION}`);
         process.exit(0);
         break;
     }
@@ -127,7 +131,7 @@ async function main(): Promise<void> {
 
   const server = new McpServer({
     name: "mcp-server-qlever",
-    version: "0.2.0",
+    version: PKG_VERSION,
     description:
       "Query knowledge graphs via the QLever SPARQL engine. " +
       `Connected to: ${endpoint}`,

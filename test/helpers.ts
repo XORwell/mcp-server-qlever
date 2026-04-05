@@ -31,20 +31,6 @@ export async function isQleverAvailable(): Promise<boolean> {
   }
 }
 
-/**
- * Vitest helper: skip the test if QLever container is not running.
- * Use as: const describeWithQlever = await containerSuite();
- */
-export async function containerSuite() {
-  const available = await isQleverAvailable();
-  if (!available) {
-    console.warn(
-      "⚠ QLever container not available — skipping integration tests.\n" +
-        "  Start it with: docker compose -f docker-compose.test.yml up -d --wait",
-    );
-  }
-  return available;
-}
 
 /** Known entity IRIs in the test dataset. */
 export const ENTITIES = {

@@ -1,8 +1,8 @@
 {
   "name": "mcp-server-qlever",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Model Context Protocol (MCP) server for QLever SPARQL engine — query knowledge graphs from Claude Code and other MCP clients",
-  "author": "XORwell",
+  "author": "Christian Nennemann",
   "license": "MIT",
   "repository": {
     "type": "git",
@@ -43,7 +43,9 @@
     "test:watch": "vitest",
     "test:unit": "vitest run test/unit",
     "test:integration": "vitest run test/integration",
-    "test:ci": "docker compose -f docker-compose.test.yml up -d --wait && vitest run; docker compose -f docker-compose.test.yml down -v",
+    "test:e2e": "vitest run test/e2e",
+    "test:ci": "docker compose -f docker-compose.test.yml up -d --wait && vitest run test/unit test/integration; docker compose -f docker-compose.test.yml down -v",
+    "test:ci:gnd": "npm run build && docker compose -f docker-compose.gnd.yml up -d --wait && vitest run; docker compose -f docker-compose.gnd.yml down -v",
     "prepublishOnly": "npm run build"
   },
   "dependencies": {

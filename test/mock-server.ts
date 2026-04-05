@@ -125,14 +125,36 @@ export function mockErrorResult(message: string): MockResponse {
 }
 
 export function mockStatsResult(overrides?: Record<string, unknown>): MockResponse {
+  // Matches real QLever `?cmd=stats` response format (kebab-case keys).
+  // The client normalizes these to camelCase in getIndexStats().
+  const defaults: Record<string, unknown> = {
+    "name-index": "test-index",
+    "num-triples-normal": 42,
+    "num-predicates-normal": 7,
+    "num-subjects-normal": 14,
+    "num-objects-normal": 30,
+    "num-triples-internal": 0,
+    "num-predicates-internal": 0,
+    "num-subjects-internal": 0,
+    "num-objects-internal": 0,
+  };
+
+  // Support both kebab-case and camelCase keys in overrides for convenience.
+  const mapped: Record<string, unknown> = {};
+  const keyMap: Record<string, string> = {
+    name: "name-index",
+    numTriples: "num-triples-normal",
+    numPredicates: "num-predicates-normal",
+    numSubjects: "num-subjects-normal",
+    numObjects: "num-objects-normal",
+  };
+  if (overrides) {
+    for (const [k, v] of Object.entries(overrides)) {
+      mapped[keyMap[k] ?? k] = v;
+    }
+  }
+
   return {
-    body: {
-      name: "test-index",
-      numTriples: 42,
-      numPredicates: 7,
-      numSubjects: 14,
-      numObjects: 30,
-      ...overrides,
-    },
+    body: { ...defaults, ...mapped },
   };
 }
