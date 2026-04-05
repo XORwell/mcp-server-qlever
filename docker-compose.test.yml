@@ -15,6 +15,7 @@ services:
       - qlever-data:/data
       - ./test/fixtures:/fixtures:ro
     working_dir: /data
+    user: root
     entrypoint: ["/bin/bash", "-c"]
     command:
       - |
