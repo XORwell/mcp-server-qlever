@@ -36,9 +36,17 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm run build
-      - run: docker compose -p qlever-test -f docker-compose.test.yml up -d --wait
+      - name: Start QLever test container
+        run: |
+          docker compose -p qlever-test -f docker-compose.test.yml up -d --wait || {
+            echo "=== Container logs ==="
+            docker compose -p qlever-test -f docker-compose.test.yml logs
+            exit 1
+          }
       - run: npm run test:integration
-      - run: docker compose -p qlever-test -f docker-compose.test.yml down -v
+      - name: Stop QLever test container
+        if: always()
+        run: docker compose -p qlever-test -f docker-compose.test.yml down -v
 
   # E2E tests require GND data fixture (generated locally, not in CI).
   # The tests skip gracefully when QLever is unavailable.
