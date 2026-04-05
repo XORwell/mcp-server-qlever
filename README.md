@@ -36,7 +36,7 @@ Done. Claude can now query your knowledge graph.
 ### B) You want everything from scratch (QLever + MCP)
 
 ```bash
-docker compose up -d --wait
+docker compose -f docker-compose.allinone.yml up -d --wait
 claude mcp add qlever -- npx -y mcp-server-qlever -e http://localhost:7019
 ```
 
