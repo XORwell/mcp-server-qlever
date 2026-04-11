@@ -21,7 +21,17 @@ import re
 import sys
 from typing import TextIO
 
-import ijson
+try:
+    import ijson
+except ImportError:
+    print(
+        "error: jsonld-to-nt.py requires the 'ijson' package for streaming JSON parsing.\n"
+        "Install it with one of:\n"
+        "  pip install ijson\n"
+        "  python3 -m pip install ijson",
+        file=sys.stderr,
+    )
+    sys.exit(1)
 
 
 def escape_nt(s: str) -> str:
