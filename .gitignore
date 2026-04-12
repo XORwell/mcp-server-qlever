@@ -2,6 +2,7 @@ node_modules/
 dist/
 *.tsbuildinfo
 .env
+__pycache__/
 
 # Generated test fixtures (large RDF dumps)
 test/fixtures/gnd/
