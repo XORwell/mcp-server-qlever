@@ -71,6 +71,30 @@ function validateTimeout(timeout: string): string {
   return timeout;
 }
 
+const TIMEOUT_UNIT_MS: Record<string, number> = {
+  ns: 1e-6,
+  us: 1e-3,
+  ms: 1,
+  s: 1000,
+  min: 60_000,
+  h: 3_600_000,
+};
+
+/** Convert a validated QLever duration (e.g. "2min") to milliseconds. */
+function timeoutToMs(timeout: string): number {
+  const match = /^(\d+)(ns|us|ms|s|min|h)$/.exec(timeout);
+  if (!match) return 0;
+  return Number(match[1]) * TIMEOUT_UNIT_MS[match[2]];
+}
+
+/** Result of {@link QleverClient.analyzeQuery}. */
+export interface QleverQueryAnalysis {
+  resultSizeTotal: number;
+  time: QleverTimings;
+  warnings: string[];
+  runtimeInformation: unknown;
+}
+
 export class QleverClient {
   private readonly _endpoint: string;
   private readonly _accessToken?: string;
@@ -112,6 +136,7 @@ export class QleverClient {
 
     const result = await this.post<QleverResult>(params, {
       accept: "application/qlever-results+json",
+      queryTimeoutMs: timeoutToMs(timeout),
     });
 
     if (result.status === "ERROR") {
@@ -159,52 +184,32 @@ export class QleverClient {
   }
 
   // -------------------------------------------------------------------------
-  // Autocompletion
-  // -------------------------------------------------------------------------
-
-  /** Call QLever's /ac autocompletion endpoint. */
-  async autocomplete(
-    partialQuery: string,
-    opts?: { context?: string; entityName?: string; limit?: number },
-  ): Promise<{ completions: Array<{ text: string; score?: number }> }> {
-    const url = new URL(this._endpoint);
-    url.pathname = url.pathname.replace(/\/+$/, "") + "/ac";
-    url.searchParams.set("q", partialQuery);
-    if (opts?.context) url.searchParams.set("context", opts.context);
-    if (opts?.entityName) url.searchParams.set("entity_name", opts.entityName);
-    if (opts?.limit !== undefined) url.searchParams.set("limit", String(opts.limit));
-
-    const res = await this.fetchUrl(url.toString(), {
-      method: "GET",
-      headers: this.baseHeaders(),
-    });
-    return this.parseJson<{ completions: Array<{ text: string; score?: number }> }>(res);
-  }
-
-  // -------------------------------------------------------------------------
   // Query analysis
   // -------------------------------------------------------------------------
 
-  /** Analyze a SPARQL query plan without executing it. */
-  async analyzeQuery(query: string): Promise<unknown> {
-    const url = new URL(this._endpoint);
-    url.searchParams.set("query", query);
-    url.searchParams.set("action", "plan");
+  /**
+   * Run a SPARQL query without exporting any rows and return QLever's
+   * runtime information (the executed query plan with estimated and actual
+   * sizes and per-operation timings).
+   *
+   * QLever has no plan-only mode, so the query IS executed (subject to the
+   * timeout); only the result serialization is skipped.
+   */
+  async analyzeQuery(
+    query: string,
+    opts?: { timeout?: string },
+  ): Promise<QleverQueryAnalysis> {
+    const result = (await this.query(query, {
+      timeout: opts?.timeout,
+      maxRows: 0,
+    })) as QleverQueryResult & { runtimeInformation?: unknown };
 
-    const res = await this.fetchUrl(url.toString(), {
-      method: "GET",
-      headers: {
-        Accept: "application/json",
-        ...this.baseHeaders(),
-      },
-    });
-
-    const text = await res.text();
-    try {
-      return JSON.parse(text);
-    } catch {
-      return text;
-    }
+    return {
+      resultSizeTotal: result.resultSizeTotal,
+      time: result.time,
+      warnings: result.warnings ?? [],
+      runtimeInformation: result.runtimeInformation ?? null,
+    };
   }
 
   // -------------------------------------------------------------------------
@@ -224,7 +229,12 @@ export class QleverClient {
 
     const url = new URL(this._endpoint);
     if (opts?.graphUri) {
-      url.searchParams.set("using-graph-uri", opts.graphUri);
+      // QLever expects the bare IRI here; angle brackets trigger a server error.
+      const bare = opts.graphUri.replace(/^<(.*)>$/, "$1");
+      if (bare.length === 0 || /[<>"{}|\\^`\s\x00-\x1F\x7F]/.test(bare)) {
+        throw new QleverError(`Invalid graph IRI: ${opts.graphUri}`);
+      }
+      url.searchParams.set("using-graph-uri", bare);
     }
 
     const headers: Record<string, string> = {
@@ -263,7 +273,7 @@ export class QleverClient {
 
   private async post<T>(
     params: URLSearchParams,
-    opts: { accept: string },
+    opts: { accept: string; queryTimeoutMs?: number },
   ): Promise<T> {
     const headers: Record<string, string> = {
       ...this.baseHeaders(),
@@ -274,6 +284,12 @@ export class QleverClient {
       method: "POST",
       headers,
       body: params.toString(),
+      signal: AbortSignal.timeout(
+        Math.max(
+          QleverClient.FETCH_TIMEOUT_MS,
+          (opts.queryTimeoutMs ?? 0) + QleverClient.FETCH_TIMEOUT_MARGIN_MS,
+        ),
+      ),
     });
     return this.parseJson<T>(res);
   }
@@ -286,8 +302,10 @@ export class QleverClient {
     return headers;
   }
 
-  /** Maximum time to wait for any HTTP response (60s). */
+  /** Minimum time to wait for any HTTP response (60s). */
   private static readonly FETCH_TIMEOUT_MS = 60_000;
+  /** Extra time granted on top of the query timeout before aborting the request. */
+  private static readonly FETCH_TIMEOUT_MARGIN_MS = 10_000;
 
   private async fetchUrl(url: string, init: RequestInit): Promise<Response> {
     const res = await globalThis.fetch(url, {
@@ -296,9 +314,18 @@ export class QleverClient {
     });
     if (!res.ok) {
       const body = await res.text().catch(() => "(no body)");
-      throw new QleverError(
-        `HTTP ${res.status} ${res.statusText}: ${body.slice(0, 500)}`,
-      );
+      // QLever reports errors as JSON with an "exception" field; surface it
+      // instead of a truncated JSON blob.
+      let detail = body.slice(0, 500);
+      try {
+        const parsed = JSON.parse(body) as { exception?: unknown };
+        if (typeof parsed.exception === "string" && parsed.exception) {
+          detail = parsed.exception.slice(0, 2000);
+        }
+      } catch {
+        // not JSON — keep the raw body
+      }
+      throw new QleverError(`HTTP ${res.status} ${res.statusText}: ${detail}`);
     }
     return res;
   }

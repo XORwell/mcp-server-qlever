@@ -2,6 +2,32 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.4.0] - 2026-11-21
+
+### Changed
+
+- **`sparql_autocomplete` reimplemented (breaking)** — now takes `search_term`, `kind` (`predicate` | `class`) and `limit`, and suggests IRIs via a SPARQL query. The old parameters (`partial_query`, `context`, `entity_name`) are gone
+- **`analyze_query`** — returns QLever's runtime information (execution tree, timings, total result size) and accepts a `timeout`. The description now states that the query is executed
+- `sparql_update` `graph_uri` must be a full IRI; it is documented as the `using-graph-uri` protocol parameter (default graph for the WHERE clause), not a write target
+- Upgraded `@modelcontextprotocol/sdk` to 1.32 and `zod` to 4.x
+- `QleverClient.autocomplete()` removed
+- **`sparql_update` now requires `confirm: true` for every `DROP` and `CLEAR`**, including `DROP GRAPH <iri>` (previously only `ALL`, `DEFAULT`, `NAMED`)
+
+### Fixed
+
+- **`sparql_autocomplete` never worked** — it called a `/ac` endpoint that QLever does not have (HTTP 400)
+- **`analyze_query` executed the query and returned its full result** — the `action=plan` parameter is ignored by QLever, despite the tool claiming not to execute
+- **`spatial_query` radius mode always failed** — `SERVICE <ql:spatialJoin>` is not valid QLever syntax; now uses `geof:distance` and returns `?distance_km`
+- **`sparql_update` with `graph_uri` crashed the request** — the IRI was sent with angle brackets, triggering a QLever assertion failure
+- **Query timeouts above 60s were unusable** — the HTTP request was aborted after a fixed 60s; it now waits for the query timeout plus a margin
+- **Destructive-update guard could be bypassed** with a comment between keywords (`DROP # x\n ALL`); keywords inside strings, IRIs and comments no longer trigger it
+- `sparql_update` dry run reported `UNKNOWN` for updates starting with `PREFIX`; it now lists all operations in the request
+- CLI: a flag without a value, an invalid `--timeout` or a non-http(s) endpoint now exits with a clear error instead of failing on the first tool call
+- HTTP error messages now show QLever's `exception` text instead of a truncated JSON body
+- Coordinates in exponent notation (e.g. `1e-7`) produced invalid SPARQL in `spatial_query`
+- 16 dependency advisories reported by `npm audit` (1 critical, 10 high), including the MCP SDK and zod
+- README stated Node.js 18+; the package requires Node.js 20+
+
 ## [0.3.0] - 2026-04-05
 
 ### Added

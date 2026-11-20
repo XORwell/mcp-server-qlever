@@ -645,6 +645,11 @@ describe("Security & Input Validation", () => {
       ["DROP SILENT DEFAULT", "DROP SILENT DEFAULT"],
       ["CLEAR SILENT NAMED", "CLEAR SILENT NAMED"],
       // Case insensitive
+      ["DROP GRAPH <http://example.org/g>", "DROP specific GRAPH"],
+      ["CLEAR GRAPH <http://example.org/g>", "CLEAR specific GRAPH"],
+      ["DROP # comment\n ALL", "DROP ALL split by a comment"],
+      ["PREFIX ex: <http://example.org/> DROP GRAPH ex:g", "DROP after PREFIX"],
+      ["INSERT DATA { <a:a> <a:b> <a:c> } ; CLEAR ALL", "CLEAR in a later operation"],
       ["drop all", "drop all (lowercase)"],
       ["Drop Named", "Drop Named (mixed case)"],
     ];
@@ -665,8 +670,8 @@ describe("Security & Input Validation", () => {
     const safeOps: Array<[string, string]> = [
       ["INSERT DATA { <a> <b> <c> }", "INSERT DATA"],
       ["DELETE WHERE { <a> <b> <c> }", "DELETE WHERE"],
-      ["DROP GRAPH <http://example.org/g>", "DROP specific GRAPH"],
-      ["CLEAR GRAPH <http://example.org/g>", "CLEAR specific GRAPH"],
+      ['INSERT DATA { <a:a> <a:b> "DROP ALL" }', "DROP ALL inside a string literal"],
+      ["INSERT DATA { <http://example.org/DROP> <a:b> <a:c> } # CLEAR ALL", "keywords in IRI and comment"],
     ];
 
     for (const [update, description] of safeOps) {

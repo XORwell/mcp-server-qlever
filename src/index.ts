@@ -42,21 +42,28 @@ function parseArgs(argv: string[]): CliArgs {
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i];
     const next = argv[i + 1];
+    const value = (): string => {
+      // Tokens may legitimately start with "-"; other values may not.
+      const isToken = arg === "--access-token" || arg === "--token" || arg === "-t";
+      if (next === undefined || (!isToken && next.startsWith("-"))) {
+        console.error(`Error: ${arg} requires a value.\nRun with --help for usage information.`);
+        process.exit(1);
+      }
+      i++;
+      return next;
+    };
     switch (arg) {
       case "--endpoint":
       case "-e":
-        args.endpoint = next;
-        i++;
+        args.endpoint = value();
         break;
       case "--access-token":
       case "--token":
       case "-t":
-        args.accessToken = next;
-        i++;
+        args.accessToken = value();
         break;
       case "--timeout":
-        args.timeout = next;
-        i++;
+        args.timeout = value();
         break;
       case "--help":
       case "-h":
@@ -117,6 +124,23 @@ async function main(): Promise<void> {
     args.accessToken ?? process.env.QLEVER_ACCESS_TOKEN;
   const timeout =
     args.timeout ?? process.env.QLEVER_TIMEOUT ?? "30s";
+
+  if (!/^\d+(ns|us|ms|s|min|h)$/.test(timeout)) {
+    console.error(
+      `Error: invalid timeout "${timeout}". Expected <number><unit> with unit ns, us, ms, s, min or h (e.g. "30s").`,
+    );
+    process.exit(1);
+  }
+
+  if (endpoint) {
+    try {
+      const protocol = new URL(endpoint).protocol;
+      if (protocol !== "http:" && protocol !== "https:") throw new Error();
+    } catch {
+      console.error(`Error: invalid endpoint URL "${endpoint}". Expected an http(s) URL.`);
+      process.exit(1);
+    }
+  }
 
   if (!endpoint) {
     console.error(

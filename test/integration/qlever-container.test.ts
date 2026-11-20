@@ -11,6 +11,7 @@ import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { QleverClient } from "../../src/qlever-client.js";
 import { registerTools } from "../../src/tools.js";
+import { registerAdvancedTools } from "../../src/advanced-tools.js";
 import { isQleverAvailable, createTestClient, ENTITIES } from "../helpers.js";
 
 let client: QleverClient;
@@ -32,6 +33,7 @@ beforeAll(async () => {
 
   const mcpServer = new McpServer({ name: "integration-test", version: "0.0.1" });
   registerTools(mcpServer, client);
+  registerAdvancedTools(mcpServer, client);
 
   mcpClient = new Client({ name: "integration-client", version: "0.0.1" });
   const [ct, st] = InMemoryTransport.createLinkedPair();
@@ -185,5 +187,73 @@ describe("Integration: MCP Tools", () => {
     expect(text).toContain("?count");
     expect(text).toContain("type");
     expect(text).toContain("label");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Advanced tools against real container
+// ---------------------------------------------------------------------------
+
+describe("Integration: Advanced MCP Tools", () => {
+  it("sparql_autocomplete suggests predicates that exist in the dataset", async () => {
+    if (await skipIfUnavailable()) return;
+    const result = await mcpClient.callTool({
+      name: "sparql_autocomplete",
+      arguments: { search_term: "birth" },
+    });
+    expect(result.isError).toBeFalsy();
+    const text = getText(result);
+    expect(text).toContain("<http://example.org/birthYear>");
+    expect(text).toMatch(/\(count: \d+\)/);
+  });
+
+  it("sparql_autocomplete suggests classes", async () => {
+    if (await skipIfUnavailable()) return;
+    const result = await mcpClient.callTool({
+      name: "sparql_autocomplete",
+      arguments: { search_term: "scientist", kind: "class" },
+    });
+    expect(result.isError).toBeFalsy();
+    expect(getText(result)).toContain("<http://example.org/Scientist>");
+  });
+
+  it("analyze_query returns the execution tree without result rows", async () => {
+    if (await skipIfUnavailable()) return;
+    const result = await mcpClient.callTool({
+      name: "analyze_query",
+      arguments: { query: "SELECT * WHERE { ?s ?p ?o }" },
+    });
+    expect(result.isError).toBeFalsy();
+    const analysis = JSON.parse(getText(result));
+    expect(analysis.resultSizeTotal).toBeGreaterThan(0);
+    expect(analysis.runtimeInformation.query_execution_tree).toBeDefined();
+    expect(analysis.res).toBeUndefined();
+  });
+
+  it("spatial_query radius mode produces SPARQL that QLever accepts", async () => {
+    if (await skipIfUnavailable()) return;
+    const result = await mcpClient.callTool({
+      name: "spatial_query",
+      arguments: { params: { mode: "radius", lat: 52.5, lon: 13.4, radius_km: 50 } },
+    });
+    // The test dataset has no coordinates — the query must still be valid.
+    expect(result.isError).toBeFalsy();
+  });
+
+  it("spatial_query bbox mode produces SPARQL that QLever accepts", async () => {
+    if (await skipIfUnavailable()) return;
+    const result = await mcpClient.callTool({
+      name: "spatial_query",
+      arguments: {
+        params: { mode: "bbox", min_lat: 52, max_lat: 53, min_lon: 13, max_lon: 14 },
+      },
+    });
+    expect(result.isError).toBeFalsy();
+  });
+
+  it("list_named_graphs runs without error", async () => {
+    if (await skipIfUnavailable()) return;
+    const result = await mcpClient.callTool({ name: "list_named_graphs", arguments: {} });
+    expect(result.isError).toBeFalsy();
   });
 });

@@ -262,13 +262,9 @@ describe("GND: MCP Tools", () => {
     if (await skipIfUnavailable()) return;
     const result = await mcpClient.callTool({
       name: "sparql_autocomplete",
-      arguments: {
-        query: `SELECT ?x WHERE { ?x <${GND_NS}`,
-        cursor_position: `SELECT ?x WHERE { ?x <${GND_NS}`.length,
-      },
+      arguments: { search_term: "preferredName" },
     });
-    // Autocomplete may error if the QLever instance lacks AC support —
-    // we just verify the tool doesn't crash unexpectedly.
-    expect(result.content).toBeDefined();
+    expect(result.isError).toBeFalsy();
+    expect(getText(result)).toContain("preferredNameForTheWork");
   });
 });

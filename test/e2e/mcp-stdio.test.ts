@@ -348,16 +348,17 @@ describe("E2E: search_fulltext", () => {
 });
 
 describe("E2E: sparql_autocomplete", () => {
-  it("returns without crash (may error without AC support)", async () => {
+  it("suggests GND predicates matching the search term", async () => {
     if (await skip()) return;
     const result = await client.callTool({
       name: "sparql_autocomplete",
       arguments: {
-        partial_query: "SELECT ?x WHERE { ?x ",
+        search_term: "preferredName",
         limit: 5,
       },
     });
-    expect(result.content).toBeDefined();
+    expect(result.isError).toBeFalsy();
+    expect(getText(result)).toContain("preferredNameForTheWork");
   });
 });
 

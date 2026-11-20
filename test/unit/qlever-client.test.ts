@@ -4,7 +4,7 @@
  * Uses a mock HTTP server to test the client in isolation — no Docker needed.
  */
 
-import { describe, it, expect, beforeAll, afterAll, beforeEach } from "vitest";
+import { describe, it, expect, beforeAll, afterAll, beforeEach, vi } from "vitest";
 import { QleverClient, QleverError } from "../../src/qlever-client.js";
 import {
   MockQleverServer,
@@ -537,37 +537,47 @@ describe("QleverClient", () => {
   // -------------------------------------------------------------------------
 
   describe("analyzeQuery()", () => {
-    it("sends query with action=plan via GET", async () => {
+    it("runs the query via POST with send=0 (no rows exported)", async () => {
       let receivedQuery = "";
-      let receivedAction = "";
+      let receivedSend: string | null = null;
       let receivedMethod = "";
 
-      mock.setHandler((method, url) => {
+      mock.setHandler((method, _url, body) => {
+        const params = new URLSearchParams(body);
         receivedMethod = method;
-        receivedQuery = url.searchParams.get("query") ?? "";
-        receivedAction = url.searchParams.get("action") ?? "";
-        return { body: { plan: "mock-plan" } };
+        receivedQuery = params.get("query") ?? "";
+        receivedSend = params.get("send");
+        return mockQueryResult({ selected: ["?x"], res: [], totalResults: 7 });
       });
 
       await client.analyzeQuery("SELECT ?x WHERE { ?x ?y ?z }");
 
-      expect(receivedMethod).toBe("GET");
+      expect(receivedMethod).toBe("POST");
       expect(receivedQuery).toBe("SELECT ?x WHERE { ?x ?y ?z }");
-      expect(receivedAction).toBe("plan");
+      expect(receivedSend).toBe("0");
     });
 
-    it("returns parsed JSON when response is valid JSON", async () => {
-      mock.setHandler(() => ({ body: { plan: "test-plan", cost: 42 } }));
+    it("returns runtime information, timings and total result size", async () => {
+      mock.setHandler(() => {
+        const r = mockQueryResult({ selected: ["?x"], res: [], totalResults: 7 });
+        (r.body as Record<string, unknown>).runtimeInformation = {
+          query_execution_tree: { description: "IndexScan", result_rows: 7 },
+        };
+        return r;
+      });
 
       const result = await client.analyzeQuery("SELECT 1");
-      expect(result).toEqual({ plan: "test-plan", cost: 42 });
+      expect(result.resultSizeTotal).toBe(7);
+      expect(result.time.total).toBe("1ms");
+      expect(result.runtimeInformation).toEqual({
+        query_execution_tree: { description: "IndexScan", result_rows: 7 },
+      });
     });
 
-    it("returns raw text when response is not JSON", async () => {
-      mock.setHandler(() => ({ body: "plain text plan output" }));
+    it("throws QleverError when QLever reports an error", async () => {
+      mock.setHandler(() => mockErrorResult("parse error"));
 
-      const result = await client.analyzeQuery("SELECT 1");
-      expect(result).toBe("plain text plan output");
+      await expect(client.analyzeQuery("SELECT")).rejects.toThrow("parse error");
     });
 
     it("throws QleverError on HTTP error", async () => {
@@ -647,53 +657,62 @@ describe("QleverClient", () => {
   });
 
   // -------------------------------------------------------------------------
-  // autocomplete() URL construction
+  // update() graph IRI handling and error reporting
   // -------------------------------------------------------------------------
 
-  describe("autocomplete()", () => {
-    it("appends /ac to the endpoint path", async () => {
-      let receivedPath = "";
+  describe("update() graph IRI and error details", () => {
+    const authed = () => new QleverClient({ endpoint: mock.url, accessToken: "tok" });
 
+    it("sends using-graph-uri as a bare IRI (no angle brackets)", async () => {
+      let received: string | null = null;
       mock.setHandler((_method, url) => {
-        receivedPath = url.pathname;
-        return { body: { completions: [] } };
+        received = url.searchParams.get("using-graph-uri");
+        return { body: { status: "OK" } };
       });
 
-      await client.autocomplete("SELECT ?x WHERE { ?x ");
-      expect(receivedPath).toBe("/ac");
+      await authed().update("INSERT DATA { <a:a> <a:b> <a:c> }", {
+        graphUri: "<http://example.org/g>",
+      });
+      expect(received).toBe("http://example.org/g");
     });
 
-    it("appends /ac without double slash for path-based endpoints", async () => {
-      let receivedPath = "";
+    it("rejects graph IRIs with illegal characters", async () => {
+      await expect(
+        authed().update("INSERT DATA { <a:a> <a:b> <a:c> }", {
+          graphUri: "<http://x> <http://y>",
+        }),
+      ).rejects.toThrow(QleverError);
+    });
 
-      const pathMock = new MockQleverServer((_method, url) => {
-        receivedPath = url.pathname;
-        return { body: { completions: [] } };
-      });
+    it("surfaces QLever's exception message from HTTP error bodies", async () => {
+      mock.setHandler(() => ({
+        status: 400,
+        body: { status: "ERROR", exception: "Invalid SPARQL query: boom" },
+      }));
 
-      await pathMock.start();
+      await expect(authed().update("INSERT DATA {")).rejects.toThrow(
+        /HTTP 400.*Invalid SPARQL query: boom$/,
+      );
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // HTTP timeout
+  // -------------------------------------------------------------------------
+
+  describe("HTTP timeout", () => {
+    it("allows the HTTP request to outlive long query timeouts", async () => {
+      const spy = vi.spyOn(AbortSignal, "timeout");
       try {
-        const pathClient = new QleverClient({
-          endpoint: pathMock.url + "/api/wikidata",
-        });
-        await pathClient.autocomplete("SELECT ");
-        expect(receivedPath).toBe("/api/wikidata/ac");
-        expect(receivedPath).not.toContain("//");
+        mock.setHandler(() => mockQueryResult({ selected: ["?x"], res: [] }));
+        await client.query("SELECT ?x WHERE { ?x ?y ?z }", { timeout: "5min" });
+        expect(spy).toHaveBeenCalledWith(310_000);
+
+        await client.query("SELECT ?x WHERE { ?x ?y ?z }", { timeout: "1s" });
+        expect(spy).toHaveBeenLastCalledWith(60_000);
       } finally {
-        await pathMock.stop();
+        spy.mockRestore();
       }
-    });
-
-    it("passes query parameter as q", async () => {
-      let receivedQ = "";
-
-      mock.setHandler((_method, url) => {
-        receivedQ = url.searchParams.get("q") ?? "";
-        return { body: { completions: [] } };
-      });
-
-      await client.autocomplete("SELECT ?x WHERE { ?x ");
-      expect(receivedQ).toBe("SELECT ?x WHERE { ?x ");
     });
   });
 

@@ -20,8 +20,8 @@ export function registerPrompts(server: McpServer): void {
 1. Call get_index_stats to understand the dataset scale and available features.
 2. Call get_predicates(limit=30) to see the most common schema elements.
 3. Call list_named_graphs if the dataset may be multi-graph.
-4. Use sparql_autocomplete to validate entity IRIs before writing queries.
-5. Use analyze_query on complex queries before executing them.
+4. Use sparql_autocomplete to find predicate and class IRIs before writing queries.
+5. Use analyze_query (with a short timeout) to inspect how complex queries are evaluated.
 6. Use search_fulltext (if text index is present) for keyword-based entity discovery.
 7. Use spatial_query for geographic searches (if the dataset has coordinate data).
 
@@ -43,7 +43,7 @@ Start with step 1 now.`,
 
 1. Call get_index_stats to confirm the dataset and check write access indicators.
 2. Compose the SPARQL UPDATE statement.
-3. Call sparql_update with dry_run: true to preview what would change.
+3. Call sparql_update with dry_run: true to review the statement (it is not sent to QLever).
 4. Review the dry_run output carefully.
 5. Call sparql_update with dry_run: false to execute (add confirm: true for destructive operations).
 

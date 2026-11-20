@@ -79,6 +79,74 @@ export const PREDICATE_REGEX =
   /^([a-zA-Z_][a-zA-Z0-9_.]*:[a-zA-Z0-9_.\-]*|:[a-zA-Z0-9_.\-]+|<[a-zA-Z][a-zA-Z0-9+\-.]*:[^\s<>"{}|\\^`\x00-\x1F]+>)$/;
 
 // ---------------------------------------------------------------------------
+// SPARQL Update inspection
+// ---------------------------------------------------------------------------
+
+/**
+ * Return the SPARQL text with IRIs, string literals and comments blanked out,
+ * so keyword checks cannot be fooled by (or hidden behind) their contents.
+ */
+export function stripSparqlLiteralsAndComments(sparql: string): string {
+  let out = "";
+  let i = 0;
+  while (i < sparql.length) {
+    const rest = sparql.slice(i);
+    const iri = /^<[^<>"{}|^`\\\s]*>/.exec(rest);
+    if (iri) {
+      out += " <> ";
+      i += iri[0].length;
+      continue;
+    }
+    const str =
+      /^"""[\s\S]*?"""/.exec(rest) ??
+      /^'''[\s\S]*?'''/.exec(rest) ??
+      /^"(?:[^"\\\n]|\\.)*"/.exec(rest) ??
+      /^'(?:[^'\\\n]|\\.)*'/.exec(rest);
+    if (str) {
+      out += ' "" ';
+      i += str[0].length;
+      continue;
+    }
+    if (sparql[i] === "#") {
+      const end = sparql.indexOf("\n", i);
+      i = end === -1 ? sparql.length : end;
+      out += " ";
+      continue;
+    }
+    out += sparql[i];
+    i++;
+  }
+  return out;
+}
+
+const UPDATE_KEYWORDS = [
+  "INSERT", "DELETE", "CLEAR", "DROP", "CREATE", "LOAD", "COPY", "MOVE", "ADD", "WITH",
+] as const;
+
+/**
+ * Summarize a SPARQL Update: the operation keywords it contains (in order)
+ * and whether it removes whole graphs (any DROP or CLEAR).
+ */
+export function inspectSparqlUpdate(update: string): {
+  operations: string[];
+  destructive: boolean;
+} {
+  const text = stripSparqlLiteralsAndComments(update).toUpperCase();
+  const operations: string[] = [];
+  for (const m of text.matchAll(/\b[A-Z]+\b/g)) {
+    const word = m[0] as (typeof UPDATE_KEYWORDS)[number];
+    // "DELETE { } INSERT { }" is one operation; don't report INSERT twice in a row.
+    if (UPDATE_KEYWORDS.includes(word) && operations[operations.length - 1] !== word) {
+      operations.push(word);
+    }
+  }
+  return {
+    operations,
+    destructive: operations.includes("DROP") || operations.includes("CLEAR"),
+  };
+}
+
+// ---------------------------------------------------------------------------
 // Result formatting
 // ---------------------------------------------------------------------------
 

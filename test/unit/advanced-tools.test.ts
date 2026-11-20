@@ -35,39 +35,6 @@ describe("Advanced MCP Tools", () => {
     const cmd = url.searchParams.get("cmd");
     const pathname = url.pathname;
 
-    // Autocompletion endpoint
-    if (pathname.endsWith("/ac")) {
-      const q = url.searchParams.get("q") ?? "";
-      return {
-        body: {
-          query: q,
-          completions: [
-            { text: "<http://www.wikidata.org/entity/Q42>", score: 100 },
-            { text: "<http://www.wikidata.org/entity/Q937>", score: 80 },
-          ],
-        },
-      };
-    }
-
-    // Query plan analysis
-    if (url.searchParams.get("action") === "plan") {
-      return {
-        body: {
-          query: url.searchParams.get("query"),
-          plan: {
-            type: "SORT",
-            estimatedSize: 1000,
-            children: [
-              {
-                type: "JOIN",
-                estimatedSize: 500,
-              },
-            ],
-          },
-        },
-      };
-    }
-
     if (cmd === "stats") {
       return mockStatsResult({
         name: "test-dataset",
@@ -92,6 +59,27 @@ describe("Advanced MCP Tools", () => {
     // Parse query from URL-encoded body
     const params = new URLSearchParams(body);
     const query = params.get("query") ?? "";
+
+    // Query analysis (send=0)
+    if (params.get("send") === "0") {
+      const r = mockQueryResult({ selected: ["?s"], res: [], totalResults: 1000 });
+      (r.body as Record<string, unknown>).runtimeInformation = {
+        query_execution_tree: { description: "SORT", estimated_size: 1000, children: [] },
+      };
+      return r;
+    }
+
+    // Predicate / class completion
+    if (query.includes("?completion")) {
+      return mockQueryResult({
+        selected: ["?completion", "?count"],
+        res: [
+          ["<http://example.org/birthYear>", '"100"^^<http://www.w3.org/2001/XMLSchema#int>'],
+          ["<http://example.org/birthPlace>", '"80"^^<http://www.w3.org/2001/XMLSchema#int>'],
+        ],
+        totalResults: 2,
+      });
+    }
 
     // Named graphs query
     if (query.includes("GRAPH ?g")) {
@@ -118,7 +106,7 @@ describe("Advanced MCP Tools", () => {
     }
 
     // Spatial query (radius or bbox)
-    if (query.includes("ql:spatialJoin") || query.includes("geof:latitude")) {
+    if (query.includes("geof:distance") || query.includes("geof:latitude")) {
       return mockQueryResult({
         selected: ["?entity", "?label", "?coord"],
         res: [
@@ -192,68 +180,80 @@ describe("Advanced MCP Tools", () => {
   // -----------------------------------------------------------------------
 
   describe("sparql_autocomplete", () => {
-    it("returns completions as a numbered list", async () => {
+    const captureQuery = (res: string[][] = []) => {
+      const captured = { query: "", send: "" };
+      mock.setHandler((_m, _u, body) => {
+        const params = new URLSearchParams(body);
+        captured.query = params.get("query") ?? "";
+        captured.send = params.get("send") ?? "";
+        return mockQueryResult({ selected: ["?completion", "?count"], res });
+      });
+      return captured;
+    };
+
+    it("returns completions as a numbered list with counts", async () => {
       const result = await mcpClient.callTool({
         name: "sparql_autocomplete",
-        arguments: { partial_query: "SELECT ?x WHERE { ?x " },
+        arguments: { search_term: "birth" },
       });
 
       expect(result.isError).toBeFalsy();
       const text = getText(result);
-      expect(text).toContain("1.");
-      expect(text).toContain("Q42");
-      expect(text).toContain("score: 100");
-      expect(text).toContain("2.");
-      expect(text).toContain("Q937");
+      expect(text).toContain("1. <http://example.org/birthYear> (count: 100)");
+      expect(text).toContain("2. <http://example.org/birthPlace> (count: 80)");
     });
 
     it("returns 'No completions found' when empty", async () => {
-      mock.setHandler((_m, url) => {
-        if (url.pathname.endsWith("/ac")) {
-          return { body: { completions: [] } };
-        }
-        return mockStatsResult();
-      });
-
+      captureQuery();
       const result = await mcpClient.callTool({
         name: "sparql_autocomplete",
-        arguments: { partial_query: "xyz" },
+        arguments: { search_term: "xyz" },
       });
 
       expect(result.isError).toBeFalsy();
-      const text = getText(result);
-      expect(text).toContain("No completions found");
+      expect(getText(result)).toContain("No completions found");
     });
 
-    it("passes limit parameter to the endpoint", async () => {
-      let receivedLimit = "";
-      mock.setHandler((_m, url) => {
-        if (url.pathname.endsWith("/ac")) {
-          receivedLimit = url.searchParams.get("limit") ?? "";
-          return { body: { completions: [] } };
-        }
-        return mockStatsResult();
-      });
-
+    it("completes predicates by default and applies the limit", async () => {
+      const captured = captureQuery();
       await mcpClient.callTool({
         name: "sparql_autocomplete",
-        arguments: { partial_query: "test", limit: 5 },
+        arguments: { search_term: "test", limit: 5 },
       });
 
-      expect(receivedLimit).toBe("5");
+      expect(captured.query).toContain("ql:has-predicate ?completion");
+      expect(captured.query).toContain('LCASE("test")');
+      expect(captured.query).toContain("LIMIT 5");
+      expect(captured.send).toBe("5");
+    });
+
+    it("completes classes when kind=class", async () => {
+      const captured = captureQuery();
+      await mcpClient.callTool({
+        name: "sparql_autocomplete",
+        arguments: { search_term: "", kind: "class" },
+      });
+
+      expect(captured.query).toContain("22-rdf-syntax-ns#type> ?completion");
+      expect(captured.query).not.toContain("FILTER");
+    });
+
+    it("escapes the search term to prevent SPARQL injection", async () => {
+      const captured = captureQuery();
+      await mcpClient.callTool({
+        name: "sparql_autocomplete",
+        arguments: { search_term: 'x")) } DROP ALL #' },
+      });
+
+      expect(captured.query).toContain('LCASE("x\\")) } DROP ALL #")');
     });
 
     it("returns isError=true on failure", async () => {
-      mock.setHandler((_m, url) => {
-        if (url.pathname.endsWith("/ac")) {
-          return { status: 500, body: "Internal Server Error" };
-        }
-        return mockStatsResult();
-      });
+      mock.setHandler(() => ({ status: 500, body: "Internal Server Error" }));
 
       const result = await mcpClient.callTool({
         name: "sparql_autocomplete",
-        arguments: { partial_query: "test" },
+        arguments: { search_term: "test" },
       });
 
       expect(result.isError).toBe(true);
@@ -265,7 +265,7 @@ describe("Advanced MCP Tools", () => {
   // -----------------------------------------------------------------------
 
   describe("analyze_query", () => {
-    it("returns query plan as JSON", async () => {
+    it("returns the execution tree as JSON", async () => {
       const result = await mcpClient.callTool({
         name: "analyze_query",
         arguments: { query: "SELECT ?s WHERE { ?s ?p ?o }" },
@@ -273,10 +273,10 @@ describe("Advanced MCP Tools", () => {
 
       expect(result.isError).toBeFalsy();
       const text = getText(result);
-      const plan = JSON.parse(text);
-      expect(plan.plan).toBeDefined();
-      expect(plan.plan.type).toBe("SORT");
-      expect(plan.plan.estimatedSize).toBe(1000);
+      const analysis = JSON.parse(text);
+      expect(analysis.resultSizeTotal).toBe(1000);
+      expect(analysis.time.total).toBe("1ms");
+      expect(analysis.runtimeInformation.query_execution_tree.description).toBe("SORT");
     });
 
     it("returns isError=true on network failure", async () => {
@@ -459,9 +459,11 @@ describe("Advanced MCP Tools", () => {
         },
       });
 
-      expect(receivedQuery).toContain("ql:spatialJoin");
-      expect(receivedQuery).toContain("POINT(11.5 48.1)");
-      expect(receivedQuery).toContain("10km");
+      expect(receivedQuery).not.toContain("ql:spatialJoin");
+      expect(receivedQuery).toContain(
+        'geof:distance(?coord, "POINT(11.5 48.1)"^^geo:wktLiteral) AS ?distance_km',
+      );
+      expect(receivedQuery).toContain("FILTER(?distance_km <= 10)");
     });
 
     it("executes a bounding box spatial query", async () => {
@@ -576,7 +578,7 @@ describe("Advanced MCP Tools", () => {
     it("returns dry_run summary without executing", async () => {
       let requestReceived = false;
       mock.setHandler((_m, url, _body) => {
-        if (url.searchParams.get("action") !== "plan" && !url.searchParams.get("cmd")) {
+        if (!url.searchParams.get("cmd")) {
           requestReceived = true;
         }
         return { body: {} };
@@ -682,7 +684,22 @@ describe("Advanced MCP Tools", () => {
         },
       });
 
-      expect(receivedUrl).toContain("using-graph-uri=");
+      expect(new URL(receivedUrl).searchParams.get("using-graph-uri")).toBe(
+        "http://example.org/mygraph",
+      );
+    });
+
+    it("rejects prefixed names as graph_uri", async () => {
+      const result = await mcpClient.callTool({
+        name: "sparql_update",
+        arguments: {
+          update: "INSERT DATA { <http://example.org/s> <http://example.org/p> <http://example.org/o> }",
+          graph_uri: "ex:graph",
+        },
+      });
+
+      expect(result.isError).toBe(true);
+      expect(getText(result)).toContain("full IRI");
     });
 
     it("returns isError=true on update failure", async () => {
@@ -769,7 +786,7 @@ describe("Advanced MCP Tools", () => {
       await badMcpClient.connect(ct);
 
       const toolCases: Array<{ name: string; arguments: Record<string, unknown> }> = [
-        { name: "sparql_autocomplete", arguments: { partial_query: "SELECT" } },
+        { name: "sparql_autocomplete", arguments: { search_term: "label" } },
         { name: "analyze_query", arguments: { query: "SELECT ?x WHERE { ?x ?y ?z }" } },
         { name: "list_named_graphs", arguments: {} },
         { name: "search_fulltext", arguments: { keywords: "test" } },

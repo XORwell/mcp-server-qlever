@@ -14,9 +14,9 @@ any MCP-compatible client to knowledge graphs powered by QLever.
 - Explore dataset schemas by listing predicates ordered by frequency
 - Look up entities by IRI with outgoing and incoming triples
 - Search for entities by label using full-text matching
-- Context-sensitive SPARQL autocompletion via QLever's `/ac` endpoint
+- Predicate and class completion from what actually exists in the index
 - Query plan analysis without execution
-- Geographic search (radius / bounding box) via QLever's native spatial join
+- Geographic search (radius / bounding box) via GeoSPARQL functions
 - SPARQL 1.1 Update with dry-run preview and safety guards
 - Input sanitization: IRI validation and SPARQL injection prevention
 - Works with any QLever instance (local Docker, self-hosted, or public)
@@ -103,7 +103,7 @@ npm run build
 node dist/index.js --endpoint http://localhost:7019
 ```
 
-**Requirements:** Node.js 18+ (all methods), or Docker/Podman (Docker method).
+**Requirements:** Node.js 20+ (all methods), or Docker/Podman (Docker method).
 
 ## Configuration
 
@@ -226,11 +226,11 @@ Register several QLever instances under different names:
 | `describe_entity` | Look up all triples for an entity by IRI | `iri`, `limit` |
 | `search_entities` | Full-text search for entities by label | `search_term`, `label_predicate`, `limit` |
 | `get_predicates` | List available predicates ordered by frequency | `limit`, `timeout` |
-| `sparql_autocomplete` | Context-sensitive autocompletion using QLever's /ac endpoint | `partial_query`, `context`, `entity_name`, `limit` |
-| `analyze_query` | Get query execution plan without running the query | `query` |
+| `sparql_autocomplete` | Suggest predicate or class IRIs containing a search term, ordered by usage | `search_term`, `kind`, `limit` |
+| `analyze_query` | Run a query without returning rows and show its execution tree (sizes, timings) | `query`, `timeout` |
 | `list_named_graphs` | List all named graphs with triple counts | `limit` |
 | `search_fulltext` | Search QLever's text index for entity-keyword co-occurrence | `keywords`, `filter_type`, `limit` |
-| `spatial_query` | Geographic search (radius or bounding box) via spatial join | `mode`, `lat`, `lon`, `radius_km` / bbox params, `limit` |
+| `spatial_query` | Geographic search (radius or bounding box) via GeoSPARQL `geof:` functions | `mode`, `lat`, `lon`, `radius_km` / bbox params, `limit` |
 | `sparql_update` | Execute SPARQL 1.1 Update (requires access token) | `update`, `graph_uri`, `dry_run`, `confirm` |
 
 ## Prompts
@@ -244,11 +244,11 @@ Register several QLever instances under different names:
 
 This server goes beyond generic SPARQL access by exposing QLever's unique capabilities:
 
-- **Context-sensitive autocompletion** -- The `sparql_autocomplete` tool uses QLever's `/ac` endpoint to suggest completions based on what actually exists in the index.
-- **Query plan analysis** -- The `analyze_query` tool returns QLever's internal query plan with estimated result sizes, helping predict performance before execution.
+- **Predicate and class completion** -- The `sparql_autocomplete` tool uses QLever's `ql:has-predicate` pattern to suggest predicates (or classes) that actually exist in the index, ordered by usage.
+- **Query plan analysis** -- The `analyze_query` tool returns QLever's runtime information (execution tree with estimated vs. actual sizes and per-operation timings). QLever has no plan-only mode, so the query is executed, but no rows are returned.
 - **Full-text search** -- The `search_fulltext` tool uses QLever's SPARQL+Text extension to find entities co-occurring with keywords in the text corpus.
-- **Spatial queries** -- The `spatial_query` tool uses QLever's native spatial join for efficient geographic searches.
-- **Safe SPARQL Update** -- The `sparql_update` tool includes dry-run preview, destructive operation detection (`DROP/CLEAR ALL|DEFAULT|NAMED`), and access token enforcement.
+- **Spatial queries** -- The `spatial_query` tool uses QLever's `geof:distance`, `geof:latitude` and `geof:longitude` functions on WKT point literals; radius results include the distance in km.
+- **Safe SPARQL Update** -- The `sparql_update` tool includes a dry run that echoes the statement without sending it, a `confirm` requirement for every `DROP` and `CLEAR`, and access token enforcement.
 
 ## Security
 
@@ -365,8 +365,8 @@ npm run test:ci:gnd   # all tests including E2E (GND)
 
 | Layer | Tests | What it covers |
 |-------|-------|----------------|
-| Unit | 282 | All tools, client, security (SPARQL injection, IRI validation, bounds, timeouts) |
-| Integration | 25 | Real QLever queries against scientists and GND authority data |
+| Unit | 291 | All tools, client, security (SPARQL injection, IRI validation, bounds, timeouts) |
+| Integration | 31 | Real QLever queries against scientists and GND authority data |
 | E2E | 29 | Real MCP server process over stdio, all 12 tools + 2 prompts against live QLever |
 
 ### Building the Docker image
